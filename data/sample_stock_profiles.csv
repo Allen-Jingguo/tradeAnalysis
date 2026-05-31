@@ -1,0 +1,4 @@
+timestamp,code,name,source,price,score,trend,sector,avg_volume,market_cap,volatility_pct,pe,risk_tags
+2026-05-07 09:30,600519,贵州茅台,StockPilot,1620,42,DOWN,白酒,800000,19000亿,4.5,30,估值偏高;趋势转弱
+2026-05-11 09:30,002475,立讯精密,StockPilot,35,38,DOWN,消费电子,450000,2500亿,9.2,24,追高风险;趋势转弱
+2026-05-06 09:30,300750,宁德时代,StockPilot,211,78,UP,新能源,1800000,9500亿,5.1,22,

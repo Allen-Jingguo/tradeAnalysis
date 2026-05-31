@@ -1,0 +1,1 @@
+# tradeAnalysis uses Python standard library only for the core analysis engine.

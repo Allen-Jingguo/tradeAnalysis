@@ -1,0 +1,10 @@
+[project]
+name = "trade-analysis"
+version = "0.1.0"
+description = "Analyze real trading actions, behavioral biases, and improvement paths."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+trade-analysis = "trade_analysis.cli:main"
+trade-analysis-web = "trade_analysis.webapp:main"

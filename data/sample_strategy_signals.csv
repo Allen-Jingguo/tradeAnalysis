@@ -1,0 +1,5 @@
+timestamp,code,name,action,strategy,source,price,confidence,stop_loss,target_price,valid_until,reason,risk_tags
+2026-05-06 09:40,300750,宁德时代,BUY,突破策略,StockPilot,211,82,205,235,2026-05-07 15:00,突破信号,
+2026-05-07 14:30,300750,宁德时代,SELL,突破策略,StockPilot,205,90,205,235,2026-05-07 15:00,跌破止损信号,
+2026-05-07 14:55,600519,贵州茅台,AVOID,风控过滤,StockPilot,1620,74,0,0,2026-05-10 15:00,无系统买点且震荡,估值偏高;系统外
+2026-05-11 09:30,002475,立讯精密,AVOID,风险过滤,StockPilot,35,70,0,0,2026-05-11 15:00,冲高回落风险,追高风险;趋势转弱
