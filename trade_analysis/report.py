@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .analyzer import AnalysisResult
@@ -101,7 +102,12 @@ def render_markdown(result: AnalysisResult) -> str:
     if result.matched:
         lines.append("| 代码 | 数量 | 买入 | 卖出 | 盈亏 | 盈亏% | 持有天数 |")
         lines.append("|---|---:|---:|---:|---:|---:|---:|")
-        for t in result.matched[:100]:
+        matched_desc = sorted(
+            result.matched,
+            key=lambda t: getattr(t, "sell_time", None) or getattr(t, "buy_time", None) or datetime.min,
+            reverse=True,
+        )
+        for t in matched_desc[:100]:
             lines.append(
                 f"| {t.code} {t.name} | {t.quantity} | {t.buy_price:.3f} | {t.sell_price:.3f} | "
                 f"{t.pnl:.2f} | {t.pnl_pct:.2f}% | {t.holding_days:.2f} |"
@@ -112,7 +118,12 @@ def render_markdown(result: AnalysisResult) -> str:
 
     if result.open_positions:
         lines.extend(["## 未平仓持仓", "", "| 代码 | 数量 | 成本 | 首次买入 | 止损 | 目标 |", "|---|---:|---:|---|---:|---:|"])
-        for p in result.open_positions:
+        open_desc = sorted(
+            result.open_positions,
+            key=lambda p: getattr(p, "first_buy_time", None) or datetime.min,
+            reverse=True,
+        )
+        for p in open_desc:
             lines.append(f"| {p.code} {p.name} | {p.quantity} | {p.avg_cost:.3f} | {p.first_buy_time:%Y-%m-%d} | {p.stop_loss:.3f} | {p.target_price:.3f} |")
         lines.append("")
 

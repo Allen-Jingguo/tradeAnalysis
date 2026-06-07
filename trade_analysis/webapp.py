@@ -154,7 +154,7 @@ def build_image_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
             results.append(import_trades_from_image(
                 image_path,
                 engine=str(payload.get("engine") or "auto"),
-                agent=str(payload.get("agent") or "local"),
+                agent=str(payload.get("agent") or "deepseek-v4-pro"),
             ))
     finally:
         for path in temporary_paths:

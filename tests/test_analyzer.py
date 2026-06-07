@@ -1,13 +1,22 @@
+import os
 import unittest
 from pathlib import Path
 import sys
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from trade_analysis.analyzer import AnalysisConfig, analyze_trades
-from trade_analysis.image_importer import ImageImportResult, OCRBox, merge_image_import_results, parse_broker_order_boxes
+from trade_analysis.image_importer import (
+    ImageImportResult,
+    OCRBox,
+    _is_non_stock_product,
+    import_trades_from_image,
+    merge_image_import_results,
+    parse_broker_order_boxes,
+)
 from trade_analysis.loader import load_stock_profiles, load_strategy_signals, load_trades
 from trade_analysis.webapp import ROOT, build_analysis_payload, build_clear_history_payload
 
@@ -174,6 +183,123 @@ class AnalyzerTest(unittest.TestCase):
 
         self.assertEqual(merged.imported_count, 1)
         self.assertEqual(merged.duplicate_count, 1)
+
+    def test_parse_broker_execution_image_boxes_recognises_hk_connect_sell(self):
+        boxes = [
+            OCRBox("成交日期", 44, 704, 222, 760, 0.94),
+            OCRBox("成交价", 390, 704, 570, 760, 0.94),
+            OCRBox("成交量", 704, 704, 846, 760, 0.98),
+            OCRBox("成交额", 976, 704, 1114, 760, 0.98),
+            OCRBox("药明康德", 43, 1140, 247, 1200, 0.97),
+            OCRBox("沪港通卖出", 970, 1138, 1138, 1200, 0.96),
+            OCRBox("132.400", 454, 1164, 598, 1214, 1.0),
+            OCRBox("一200", 758, 1164, 868, 1212, 0.78),
+            OCRBox("23015.900", 922, 1196, 1138, 1244, 0.74),
+            OCRBox("卖 2026052110:22:35", 51, 1199, 369, 1240, 0.88),
+        ]
+
+        result = parse_broker_order_boxes(boxes)
+
+        self.assertEqual(result.imported_count, 1)
+        self.assertEqual(result.trades[0]["name"], "药明康德")
+        self.assertEqual(result.trades[0]["side"], "SELL")
+        self.assertEqual(result.trades[0]["quantity"], 200)
+
+    def test_parse_broker_execution_image_boxes_sorts_trades_descending(self):
+        boxes = [
+            OCRBox("成交日期", 44, 704, 222, 760, 0.94),
+            OCRBox("成交价", 390, 704, 570, 760, 0.94),
+            OCRBox("成交量", 704, 704, 846, 760, 0.98),
+            OCRBox("成交额", 976, 704, 1114, 760, 0.98),
+            OCRBox("江海股份", 43, 810, 247, 870, 0.98),
+            OCRBox("买入", 1034, 810, 1138, 872, 0.99),
+            OCRBox("72.070", 454, 834, 598, 884, 1.0),
+            OCRBox("200", 758, 834, 868, 882, 1.0),
+            OCRBox("14414.000", 922, 866, 1138, 914, 0.92),
+            OCRBox("买 20260528 09:30:03", 43, 870, 361, 912, 0.94),
+            OCRBox("江海股份", 43, 1140, 247, 1200, 0.98),
+            OCRBox("卖出", 1034, 1140, 1138, 1202, 0.99),
+            OCRBox("77.980", 454, 1164, 598, 1214, 1.0),
+            OCRBox("一200", 758, 1164, 868, 1212, 0.78),
+            OCRBox("15596.000", 922, 1196, 1138, 1244, 0.72),
+            OCRBox("卖 20260529 14:55:51", 95, 1199, 357, 1235, 0.84),
+        ]
+
+        result = parse_broker_order_boxes(boxes)
+
+        self.assertEqual(result.imported_count, 2)
+        timestamps = [t["timestamp"] for t in result.trades]
+        self.assertEqual(timestamps, sorted(timestamps, reverse=True))
+        self.assertEqual(result.trades[0]["timestamp"], "2026-05-29 14:55:51")
+
+    def test_merge_image_import_results_sorts_across_days_desc(self):
+        earlier = {
+            "trade_id": "img-1",
+            "timestamp": "2026-05-26 09:35:11",
+            "code": "埃斯顿",
+            "name": "埃斯顿",
+            "side": "BUY",
+            "price": 28.93,
+            "quantity": 200,
+        }
+        later = {
+            "trade_id": "img-1",
+            "timestamp": "2026-05-29 10:36:07",
+            "code": "光迅科技",
+            "name": "光迅科技",
+            "side": "BUY",
+            "price": 211.6,
+            "quantity": 200,
+        }
+
+        merged = merge_image_import_results([
+            ImageImportResult(trades=[dict(earlier)], skipped=[], engine="easyocr"),
+            ImageImportResult(trades=[dict(later)], skipped=[], engine="easyocr"),
+        ])
+
+        self.assertEqual(merged.imported_count, 2)
+        self.assertEqual(merged.trades[0]["timestamp"], "2026-05-29 10:36:07")
+        self.assertEqual(merged.trades[0]["trade_id"], "img-1")
+        self.assertEqual(merged.trades[1]["trade_id"], "img-2")
+
+    def test_is_non_stock_product_tolerates_ocr_noise(self):
+        self.assertTrue(_is_non_stock_product("R-001"))
+        self.assertTrue(_is_non_stock_product("R - 001"))
+        self.assertTrue(_is_non_stock_product("R-OO1"))
+        self.assertTrue(_is_non_stock_product("R001"))
+        self.assertTrue(_is_non_stock_product("GC001"))
+        self.assertTrue(_is_non_stock_product("拆出质押购回"))
+        self.assertTrue(_is_non_stock_product("质押回购拆出"))
+        self.assertFalse(_is_non_stock_product("光迅科技"))
+        self.assertFalse(_is_non_stock_product("京东方A"))
+
+    def test_import_trades_from_image_falls_back_when_deepseek_unconfigured(self):
+        image_path = ROOT / "tests" / "_tmp_unused.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"")
+        boxes = [
+            OCRBox("成交日期", 44, 704, 222, 760, 0.94),
+            OCRBox("成交价", 390, 704, 570, 760, 0.94),
+            OCRBox("成交量", 704, 704, 846, 760, 0.98),
+            OCRBox("成交额", 976, 704, 1114, 760, 0.98),
+            OCRBox("江海股份", 43, 1140, 247, 1200, 0.98),
+            OCRBox("卖出", 1034, 1140, 1138, 1202, 0.99),
+            OCRBox("77.980", 454, 1164, 598, 1214, 1.0),
+            OCRBox("一200", 758, 1164, 868, 1212, 0.78),
+            OCRBox("15596.000", 922, 1196, 1138, 1244, 0.72),
+            OCRBox("卖 20260529 14:55:51", 95, 1199, 357, 1235, 0.84),
+        ]
+        env = {k: v for k, v in os.environ.items() if k != "DEEPSEEK_API_KEY"}
+        try:
+            with mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch("trade_analysis.image_importer._read_ocr_boxes", return_value=(boxes, "easyocr")):
+                result = import_trades_from_image(image_path, engine="auto", agent="deepseek")
+        finally:
+            image_path.unlink(missing_ok=True)
+
+        self.assertEqual(result.imported_count, 1)
+        self.assertEqual(result.trades[0]["name"], "江海股份")
+        self.assertIn("deepseek-v4-pro-unconfigured", result.engine)
 
 
 if __name__ == "__main__":

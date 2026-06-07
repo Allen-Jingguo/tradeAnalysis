@@ -61,6 +61,12 @@ def main(argv: list[str] | None = None) -> int:
     p_image.add_argument("--image", required=True, help="local image path")
     p_image.add_argument("--out", default="output/image_imported_trades.csv", help="output trade CSV path")
     p_image.add_argument("--engine", default="auto", choices=["auto", "easyocr", "tesseract"], help="OCR engine")
+    p_image.add_argument(
+        "--agent",
+        default="deepseek",
+        choices=["deepseek", "deepseek-v4-pro", "local", "none"],
+        help="post-OCR correction agent (defaults to DeepSeek V4 Pro; falls back to local parsing without DEEPSEEK_API_KEY)",
+    )
 
     p_analyze = sub.add_parser("analyze", help="analyze CSV/JSON trade records")
     p_analyze.add_argument("--input", required=True, help="CSV/JSON/JSONL trade records")
@@ -92,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "image-import":
-        result = import_trades_from_image(args.image, engine=args.engine)
+        result = import_trades_from_image(args.image, engine=args.engine, agent=args.agent)
         out = write_imported_csv(result, args.out)
         print(
             f"imported={result.imported_count} skipped={result.skipped_count} "
