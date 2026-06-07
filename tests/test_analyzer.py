@@ -1,3 +1,4 @@
+import csv
 import os
 import unittest
 from datetime import datetime
@@ -22,7 +23,14 @@ from trade_analysis.image_importer import (
 )
 from trade_analysis.loader import load_stock_profiles, load_strategy_signals, load_trades
 from trade_analysis.models import OpenPosition, StockProfile, StrategySignal, TradeRecord
-from trade_analysis.webapp import ROOT, build_analysis_payload, build_clear_history_payload
+from trade_analysis.webapp import (
+    GENERATED_TRADES,
+    ROOT,
+    _default_input_path,
+    build_analysis_payload,
+    build_clear_history_payload,
+    build_image_import_payload,
+)
 
 
 class AnalyzerTest(unittest.TestCase):
@@ -168,6 +176,56 @@ class AnalyzerTest(unittest.TestCase):
 
         self.assertFalse(generated.exists())
         self.assertIn(str(generated), payload["deleted"])
+
+    def test_defaults_prefer_persisted_image_import_csv_after_restart(self):
+        previous = GENERATED_TRADES.read_bytes() if GENERATED_TRADES.exists() else None
+        GENERATED_TRADES.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            GENERATED_TRADES.write_text("timestamp,code\n", encoding="utf-8")
+
+            self.assertEqual(_default_input_path(), GENERATED_TRADES)
+        finally:
+            if previous is None:
+                GENERATED_TRADES.unlink(missing_ok=True)
+            else:
+                GENERATED_TRADES.write_bytes(previous)
+
+    def test_image_import_merges_with_existing_persisted_csv(self):
+        previous = GENERATED_TRADES.read_bytes() if GENERATED_TRADES.exists() else None
+        GENERATED_TRADES.parent.mkdir(parents=True, exist_ok=True)
+        existing_csv = (
+            "timestamp,code,name,side,price,quantity,fee,reason,plan,emotion,market_context,"
+            "stop_loss,target_price,day_high,day_low,post_price_1d,post_price_3d,post_price_5d,tags\n"
+            "2026-05-28 09:30:03,江海股份,江海股份,BUY,72.07,200,,,,,,,,,,,,,\n"
+        )
+        imported_trade = {
+            "timestamp": "2026-05-29 14:55:51",
+            "code": "江海股份",
+            "name": "江海股份",
+            "side": "SELL",
+            "price": 77.98,
+            "quantity": 200,
+        }
+        try:
+            GENERATED_TRADES.write_text(existing_csv, encoding="utf-8")
+            with mock.patch(
+                "trade_analysis.webapp.import_trades_from_image",
+                return_value=ImageImportResult(trades=[imported_trade], skipped=[], engine="easyocr"),
+            ):
+                payload = build_image_import_payload({"image_paths": ["/tmp/fake-order.png"], "agent": "local"})
+
+            with GENERATED_TRADES.open("r", encoding="utf-8-sig", newline="") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(payload["imported_count"], 1)
+            self.assertEqual(payload["total_count"], 2)
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["timestamp"], "2026-05-29 14:55:51")
+            self.assertEqual(rows[1]["timestamp"], "2026-05-28 09:30:03")
+        finally:
+            if previous is None:
+                GENERATED_TRADES.unlink(missing_ok=True)
+            else:
+                GENERATED_TRADES.write_bytes(previous)
 
     def test_merge_image_import_results_deduplicates_same_trade(self):
         trade = {

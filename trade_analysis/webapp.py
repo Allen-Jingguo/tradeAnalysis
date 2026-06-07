@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import json
 import tempfile
 from dataclasses import asdict, is_dataclass
@@ -12,7 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .analyzer import AnalysisConfig, analyze_trades
-from .image_importer import import_trades_from_image, merge_image_import_results, write_imported_csv
+from .image_importer import ImageImportResult, import_trades_from_image, merge_image_import_results, write_imported_csv
 from .loader import load_stock_profiles, load_strategy_signals, load_trades
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,8 @@ DEFAULT_INPUT = ROOT / "data" / "sample_trades.csv"
 DEFAULT_STRATEGY = ROOT / "data" / "sample_strategy_signals.csv"
 DEFAULT_STOCK = ROOT / "data" / "sample_stock_profiles.csv"
 DEFAULT_IMAGE = Path("/Users/allenan/Desktop/微信图片_20260531220448_5_2.jpg")
+GENERATED_TRADES = ROOT / "output" / "image_imported_trades.csv"
+GENERATED_HOLDINGS = ROOT / "output" / "image_imported_holdings.json"
 
 
 class TradeAnalysisHandler(BaseHTTPRequestHandler):
@@ -36,7 +39,7 @@ class TradeAnalysisHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/defaults":
             self._send_json({
-                "input": str(DEFAULT_INPUT),
+                "input": str(_default_input_path()),
                 "strategy": str(DEFAULT_STRATEGY),
                 "stock": str(DEFAULT_STOCK),
                 "image": str(DEFAULT_IMAGE) if DEFAULT_IMAGE.exists() else "",
@@ -110,7 +113,7 @@ class TradeAnalysisHandler(BaseHTTPRequestHandler):
 
 
 def build_analysis_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    input_source = str(payload.get("input") or DEFAULT_INPUT).strip()
+    input_source = str(payload.get("input") or _default_input_path()).strip()
     strategy_source = str(payload.get("strategy") or payload.get("strategy_source") or DEFAULT_STRATEGY).strip()
     stock_source = str(payload.get("stock") or payload.get("stock_source") or DEFAULT_STOCK).strip()
     use_strategy = _to_bool(payload.get("use_strategy", True)) and bool(strategy_source)
@@ -154,7 +157,7 @@ def build_analysis_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_recent_holdings(explicit_path: Any) -> list[dict[str, Any]]:
-    path = Path(str(explicit_path)) if explicit_path else ROOT / "output" / "image_imported_holdings.json"
+    path = Path(str(explicit_path)) if explicit_path else GENERATED_HOLDINGS
     if not path.exists():
         return []
     try:
@@ -164,6 +167,10 @@ def _load_recent_holdings(explicit_path: Any) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return [row for row in data if isinstance(row, dict)]
     return []
+
+
+def _default_input_path() -> Path:
+    return GENERATED_TRADES if GENERATED_TRADES.exists() else DEFAULT_INPUT
 
 
 def build_image_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -182,30 +189,43 @@ def build_image_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
-    result = merge_image_import_results(results)
-    out = write_imported_csv(result, ROOT / "output" / "image_imported_trades.csv")
+    current_result = merge_image_import_results(results)
+    result = merge_image_import_results([_load_existing_imported_trades(GENERATED_TRADES), current_result])
+    out = write_imported_csv(result, GENERATED_TRADES)
     holdings_path = ""
-    if result.holdings:
-        holdings_path = str(_write_holdings_json(result.holdings))
+    if current_result.holdings:
+        holdings_path = str(_write_holdings_json(current_result.holdings))
     return {
         "csv_path": str(out),
-        "engine": result.engine,
+        "engine": current_result.engine,
         "image_count": len(image_paths),
-        "imported_count": result.imported_count,
-        "skipped_count": result.skipped_count,
+        "imported_count": current_result.imported_count,
+        "skipped_count": current_result.skipped_count,
         "duplicate_count": result.duplicate_count,
-        "holdings_count": result.holdings_count,
+        "holdings_count": current_result.holdings_count,
+        "total_count": result.imported_count,
         "holdings_path": holdings_path,
-        "page_type": result.page_type,
+        "page_type": current_result.page_type,
         "trades": result.trades,
-        "skipped": result.skipped,
+        "skipped": current_result.skipped,
         "duplicates": result.duplicates,
-        "holdings": result.holdings,
+        "holdings": current_result.holdings,
     }
 
 
+def _load_existing_imported_trades(path: Path) -> ImageImportResult:
+    if not path.exists():
+        return ImageImportResult(trades=[], skipped=[])
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            rows = [dict(row) for row in csv.DictReader(f)]
+    except (OSError, csv.Error):
+        rows = []
+    return ImageImportResult(trades=rows, skipped=[], engine="saved")
+
+
 def _write_holdings_json(holdings: list[dict[str, Any]]) -> Path:
-    out = ROOT / "output" / "image_imported_holdings.json"
+    out = GENERATED_HOLDINGS
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(holdings, ensure_ascii=False, indent=2), encoding="utf-8")
     return out
@@ -213,8 +233,8 @@ def _write_holdings_json(holdings: list[dict[str, Any]]) -> Path:
 
 def build_clear_history_payload() -> dict[str, Any]:
     generated_files = [
-        ROOT / "output" / "image_imported_trades.csv",
-        ROOT / "output" / "image_imported_holdings.json",
+        GENERATED_TRADES,
+        GENERATED_HOLDINGS,
     ]
     deleted = []
     for path in generated_files:
