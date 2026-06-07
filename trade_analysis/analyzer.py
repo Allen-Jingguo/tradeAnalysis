@@ -28,6 +28,10 @@ class AnalysisConfig:
     default_target_price_pct: float = 0.10
     atr_stop_multiple: float = 1.5
     atr_target_multiple: float = 3.0
+    # 新交易出现后的风险重评：把最近 N 个活跃交易日视为"新交易"，
+    # 与之前的历史交易作对比，判断风险有没有改善、改善在哪、还差哪。
+    reassess_window_days: int = 1
+    reassess_improve_gap_pct: float = 15.0
 
 
 @dataclass(slots=True)
@@ -41,10 +45,13 @@ class AnalysisResult:
     findings: list[dict]
     recommendations: list[dict]
     holdings_recon: list[dict] = None  # type: ignore[assignment]
+    reassessment: dict = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.holdings_recon is None:
             self.holdings_recon = []
+        if self.reassessment is None:
+            self.reassessment = {}
 
 
 def analyze_trades(
@@ -53,6 +60,7 @@ def analyze_trades(
     strategy_signals: list[StrategySignal] | None = None,
     stock_profiles: list[StockProfile] | None = None,
     holdings: list[dict] | None = None,
+    new_since: datetime | None = None,
 ) -> AnalysisResult:
     cfg = config or AnalysisConfig()
     signals = strategy_signals or []
@@ -65,9 +73,16 @@ def analyze_trades(
     holdings_recon = reconcile_holdings(open_positions, holdings or [])
     metrics["holdings_recon_count"] = len(holdings_recon)
     metrics["holdings_recon_mismatch_count"] = sum(1 for row in holdings_recon if row["status"] != "match")
+    reassessment = assess_new_trades(
+        trades, matched, findings, cfg,
+        strategy_signals=signals, stock_profiles=profiles, new_since=new_since,
+    )
+    metrics["reassessment_evaluated"] = bool(reassessment.get("evaluated"))
+    metrics["reassessment_risk_direction"] = reassessment.get("risk_score", {}).get("direction", "")
     return AnalysisResult(
         trades, matched, open_positions, signals, profiles, metrics, findings, recommendations,
         holdings_recon=holdings_recon,
+        reassessment=reassessment,
     )
 
 
@@ -858,6 +873,468 @@ def _latest_signal_at_or_before(signals: list[StrategySignal], when: datetime) -
         else:
             break
     return latest
+
+
+# ---------------------------------------------------------------------------
+# 新交易出现后的风险重评
+# ---------------------------------------------------------------------------
+
+# 单笔买入的合规检查项标签，用于改善点/待改善点的文字描述。
+_QUALITY_CHECK_LABELS = {
+    "plan": "交易计划",
+    "stop_loss": "止损价",
+    "target": "目标价",
+    "emotion": "情绪控制",
+    "chase": "不追涨",
+    "position": "仓位控制",
+    "revenge": "非报复交易",
+    "strategy": "策略支持",
+    "stock": "标的质量",
+}
+
+# behavior snapshot 的可比指标，越高越好。
+_SNAPSHOT_LABELS = {
+    "plan_coverage": "计划覆盖率",
+    "stop_coverage": "止损记录率",
+    "emotion_clean_rate": "情绪干净率",
+    "no_chase_rate": "非追高率",
+    "position_ok_rate": "仓位合规率",
+    "no_revenge_rate": "非报复率",
+    "strategy_support_rate": "策略支持率",
+    "stock_pass_rate": "标的合格率",
+    "win_rate": "胜率",
+}
+
+
+def assess_new_trades(
+    trades: list[TradeRecord],
+    matched: list[MatchedTrade],
+    findings: list[dict],
+    cfg: AnalysisConfig,
+    strategy_signals: list[StrategySignal] | None = None,
+    stock_profiles: list[StockProfile] | None = None,
+    new_since: datetime | None = None,
+) -> dict:
+    """新交易出现后，对照历史基线重新评估风险。
+
+    返回结构包含：综合风险分变化、消除/新增/仍存在的问题、可比行为指标变化、
+    每笔新买入的逐项体检，以及汇总后的"改善点"和"待改善点"。
+    """
+    signals = strategy_signals or []
+    profiles = stock_profiles or []
+
+    new_trades, prior_trades, split_since = _split_new_trades(trades, cfg, new_since)
+    if not new_trades or not prior_trades:
+        return {
+            "evaluated": False,
+            "reason": "历史交易不足，无法对照评估（至少需要两个交易日的数据）。",
+            "new_trade_count": len(new_trades),
+            "prior_trade_count": len(prior_trades),
+        }
+
+    # 历史基线：仅用之前的交易重算问题与综合风险分。
+    prior_matched, prior_open = _match_round_trips(prior_trades)
+    prior_metrics = _build_metrics(prior_trades, prior_matched, prior_open, signals, profiles, cfg)
+    prior_findings = _detect_findings(
+        prior_trades, prior_matched, prior_open, signals, profiles, prior_metrics, cfg
+    )
+
+    baseline_score = _risk_score(prior_findings)
+    current_score = _risk_score(findings)
+    risk = {
+        "baseline": baseline_score,
+        "current": current_score,
+        "delta": current_score - baseline_score,
+        "direction": _risk_direction(current_score - baseline_score),
+    }
+
+    resolved, new_issues, persistent = _diff_findings(prior_findings, findings)
+
+    # 报复交易要看全量历史亏损，新买入可能跟在更早的亏损后面。
+    loss_sell_times = [m.sell_time for m in matched if m.pnl < 0]
+    baseline_rates = _check_pass_rates(
+        [t for t in prior_trades if t.is_buy], loss_sell_times, signals, profiles, cfg
+    )
+    new_buys = [t for t in new_trades if t.is_buy]
+    new_rates = _check_pass_rates(new_buys, loss_sell_times, signals, profiles, cfg)
+
+    baseline_snapshot = _behavior_snapshot(prior_trades, prior_matched, loss_sell_times, signals, profiles, cfg)
+    new_matched, _ = _match_round_trips(new_trades)
+    new_snapshot = _behavior_snapshot(new_trades, new_matched, loss_sell_times, signals, profiles, cfg)
+    metric_changes = _snapshot_changes(baseline_snapshot, new_snapshot)
+
+    new_trade_assessments = [
+        _assess_single_buy(trade, loss_sell_times, signals, profiles, baseline_rates, cfg)
+        for trade in new_buys
+    ]
+
+    improvement_points, watch_points = _improvement_and_watch_points(
+        resolved, new_issues, persistent, metric_changes, risk,
+        baseline_rates, new_rates, cfg,
+    )
+
+    return {
+        "evaluated": True,
+        "new_since": split_since.isoformat() if split_since else None,
+        "new_trade_count": len(new_trades),
+        "new_buy_count": len(new_buys),
+        "prior_trade_count": len(prior_trades),
+        "risk_score": risk,
+        "resolved_issues": resolved,
+        "new_issues": new_issues,
+        "persistent_issues": persistent,
+        "metric_changes": metric_changes,
+        "new_trade_assessments": new_trade_assessments,
+        "improvement_points": improvement_points,
+        "watch_points": watch_points,
+        "summary": _reassessment_summary(risk, improvement_points, watch_points, len(new_trades)),
+    }
+
+
+def _split_new_trades(
+    trades: list[TradeRecord],
+    cfg: AnalysisConfig,
+    new_since: datetime | None,
+) -> tuple[list[TradeRecord], list[TradeRecord], datetime | None]:
+    ordered = sorted(trades, key=lambda t: t.timestamp)
+    if new_since is not None:
+        new = [t for t in ordered if t.timestamp >= new_since]
+        prior = [t for t in ordered if t.timestamp < new_since]
+        return new, prior, new_since
+
+    active_days = sorted({t.date_key for t in ordered})
+    if len(active_days) < 2:
+        return [], ordered, None
+    window = max(1, cfg.reassess_window_days)
+    new_days = set(active_days[-window:])
+    new = [t for t in ordered if t.date_key in new_days]
+    prior = [t for t in ordered if t.date_key not in new_days]
+    if not prior:
+        return [], ordered, None
+    split_since = min(t.timestamp for t in new) if new else None
+    return new, prior, split_since
+
+
+def _risk_score(findings: list[dict]) -> int:
+    return sum(int(f.get("severity", 0)) for f in findings)
+
+
+def _risk_direction(delta: int) -> str:
+    if delta < 0:
+        return "improved"
+    if delta > 0:
+        return "worsened"
+    return "flat"
+
+
+def _diff_findings(
+    prior_findings: list[dict],
+    current_findings: list[dict],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    prior_by_type = {f["type"]: f for f in prior_findings}
+    current_by_type = {f["type"]: f for f in current_findings}
+
+    resolved = [
+        {"type": t, "title": f["title"], "severity": f["severity"]}
+        for t, f in prior_by_type.items() if t not in current_by_type
+    ]
+    new_issues = [
+        {"type": t, "title": f["title"], "severity": f["severity"], "evidence": f.get("evidence", "")}
+        for t, f in current_by_type.items() if t not in prior_by_type
+    ]
+    persistent = [
+        {"type": t, "title": f["title"], "severity": f["severity"]}
+        for t, f in current_by_type.items() if t in prior_by_type
+    ]
+    resolved.sort(key=lambda x: -int(x["severity"]))
+    new_issues.sort(key=lambda x: -int(x["severity"]))
+    persistent.sort(key=lambda x: -int(x["severity"]))
+    return resolved, new_issues, persistent
+
+
+def _trader_recorded_stop(trade: TradeRecord) -> bool:
+    inferred = trade.raw.get("inferred_exit") if isinstance(trade.raw, dict) else None
+    if inferred is not None:
+        return float(inferred.get("original_stop_loss") or 0) > 0
+    return trade.stop_loss > 0
+
+
+def _trader_recorded_target(trade: TradeRecord) -> bool:
+    inferred = trade.raw.get("inferred_exit") if isinstance(trade.raw, dict) else None
+    if inferred is not None:
+        return float(inferred.get("original_target_price") or 0) > 0
+    return trade.target_price > 0
+
+
+def _is_chasing_buy(trade: TradeRecord, cfg: AnalysisConfig) -> bool:
+    reason = f"{trade.reason} {trade.tags}".lower()
+    near_high = (
+        trade.day_high > trade.day_low > 0
+        and (trade.price - trade.day_low) / (trade.day_high - trade.day_low) >= cfg.chase_position_ratio
+    )
+    text_hit = any(k in reason for k in ["追高", "突破", "怕踏空", "fomo", "涨停", "冲高"])
+    return bool(near_high or text_hit)
+
+
+def _is_oversized_buy(trade: TradeRecord, cfg: AnalysisConfig) -> bool:
+    return cfg.account_size > 0 and trade.amount / cfg.account_size > cfg.max_single_trade_pct
+
+
+def _is_revenge_buy(trade: TradeRecord, loss_sell_times: list[datetime], cfg: AnalysisConfig) -> bool:
+    if not trade.is_buy:
+        return False
+    window = timedelta(minutes=cfg.revenge_window_minutes)
+    return any(st < trade.timestamp <= st + window for st in loss_sell_times)
+
+
+def _trade_strategy_status(trade: TradeRecord, signals: list[StrategySignal], cfg: AnalysisConfig) -> str:
+    candidates = _valid_signals_for_trade(trade, signals, cfg)
+    if not candidates:
+        return "unsupported"
+    if any(_signal_supports_trade(s, trade) for s in candidates):
+        return "support"
+    if any(_signal_conflicts_with_trade(s, trade) for s in candidates):
+        return "conflict"
+    return "unsupported"
+
+
+def _trade_stock_risk(trade: TradeRecord, profiles: list[StockProfile], cfg: AnalysisConfig) -> list[str]:
+    profile = _profile_for_trade(trade, profiles)
+    if not profile:
+        return []
+    return _stock_profile_risk_reasons(profile, cfg)
+
+
+def _buy_quality_checks(
+    trade: TradeRecord,
+    loss_sell_times: list[datetime],
+    signals: list[StrategySignal],
+    profiles: list[StockProfile],
+    cfg: AnalysisConfig,
+) -> list[dict]:
+    checks: list[dict] = []
+
+    has_plan = bool(trade.plan.strip())
+    checks.append(_check("plan", has_plan, 3, "已写入交易计划", "缺少交易计划"))
+
+    has_stop = _trader_recorded_stop(trade)
+    checks.append(_check("stop_loss", has_stop, 3, "已记录止损价", "未记录止损价（依赖自动补录）"))
+
+    has_target = _trader_recorded_target(trade)
+    checks.append(_check("target", has_target, 1, "已记录目标价", "未记录目标价"))
+
+    emotions = _emotion_categories_for_trade(trade)
+    checks.append(_check("emotion", not emotions, 3, "无高风险情绪", "情绪线索:" + "/".join(emotions)))
+
+    chasing = _is_chasing_buy(trade, cfg)
+    checks.append(_check("chase", not chasing, 3, "非追高买入", "疑似追涨/突破追高"))
+
+    oversized = _is_oversized_buy(trade, cfg)
+    pos_note = (
+        f"仓位占比{trade.amount / cfg.account_size * 100:.1f}%超过上限{cfg.max_single_trade_pct:.0%}"
+        if oversized and cfg.account_size > 0 else "仓位在上限内"
+    )
+    checks.append(_check("position", not oversized, 3, "仓位在上限内", pos_note))
+
+    revenge = _is_revenge_buy(trade, loss_sell_times, cfg)
+    checks.append(_check("revenge", not revenge, 4, "非报复性交易", "亏损后短时间内重新开仓"))
+
+    if signals:
+        status = _trade_strategy_status(trade, signals, cfg)
+        note = {"support": "有支持的策略信号", "conflict": "与策略信号冲突", "unsupported": "无支持的策略信号"}[status]
+        checks.append(_check("strategy", status == "support", 4 if status == "conflict" else 3, note, note))
+
+    if profiles:
+        risks = _trade_stock_risk(trade, profiles, cfg)
+        note = "标的画像合格" if not risks else "标的风险:" + "/".join(risks[:3])
+        checks.append(_check("stock", not risks, 3, "标的画像合格", note))
+
+    return checks
+
+
+def _check(key: str, passed: bool, severity: int, pass_note: str, fail_note: str) -> dict:
+    return {
+        "key": key,
+        "label": _QUALITY_CHECK_LABELS.get(key, key),
+        "passed": passed,
+        "severity": severity,
+        "note": pass_note if passed else fail_note,
+    }
+
+
+def _check_pass_rates(
+    buys: list[TradeRecord],
+    loss_sell_times: list[datetime],
+    signals: list[StrategySignal],
+    profiles: list[StockProfile],
+    cfg: AnalysisConfig,
+) -> dict[str, float]:
+    counts: dict[str, int] = defaultdict(int)
+    passes: dict[str, int] = defaultdict(int)
+    for buy in buys:
+        for check in _buy_quality_checks(buy, loss_sell_times, signals, profiles, cfg):
+            counts[check["key"]] += 1
+            if check["passed"]:
+                passes[check["key"]] += 1
+    return {key: round(passes[key] / counts[key] * 100, 1) for key in counts}
+
+
+def _behavior_snapshot(
+    trades: list[TradeRecord],
+    matched: list[MatchedTrade],
+    loss_sell_times: list[datetime],
+    signals: list[StrategySignal],
+    profiles: list[StockProfile],
+    cfg: AnalysisConfig,
+) -> dict:
+    buys = [t for t in trades if t.is_buy]
+    rates = _check_pass_rates(buys, loss_sell_times, signals, profiles, cfg)
+    snapshot = {
+        "buy_count": len(buys),
+        "plan_coverage": rates.get("plan", 0.0),
+        "stop_coverage": rates.get("stop_loss", 0.0),
+        "emotion_clean_rate": rates.get("emotion", 0.0),
+        "no_chase_rate": rates.get("chase", 0.0),
+        "position_ok_rate": rates.get("position", 0.0),
+        "no_revenge_rate": rates.get("revenge", 0.0),
+    }
+    if signals:
+        snapshot["strategy_support_rate"] = rates.get("strategy", 0.0)
+    if profiles:
+        snapshot["stock_pass_rate"] = rates.get("stock", 0.0)
+    if matched:
+        wins = [m for m in matched if m.is_win]
+        snapshot["win_rate"] = round(len(wins) / len(matched) * 100, 1)
+    return snapshot
+
+
+def _snapshot_changes(baseline: dict, current: dict) -> list[dict]:
+    changes = []
+    for key, label in _SNAPSHOT_LABELS.items():
+        if key not in baseline or key not in current:
+            continue
+        before = float(baseline[key])
+        after = float(current[key])
+        delta = round(after - before, 1)
+        changes.append({
+            "key": key,
+            "label": label,
+            "baseline": before,
+            "current": after,
+            "delta": delta,
+            "better": delta > 0,
+        })
+    changes.sort(key=lambda c: c["delta"])
+    return changes
+
+
+def _assess_single_buy(
+    trade: TradeRecord,
+    loss_sell_times: list[datetime],
+    signals: list[StrategySignal],
+    profiles: list[StockProfile],
+    baseline_rates: dict[str, float],
+    cfg: AnalysisConfig,
+) -> dict:
+    checks = _buy_quality_checks(trade, loss_sell_times, signals, profiles, cfg)
+    passed = [c for c in checks if c["passed"]]
+    issues = [c for c in checks if not c["passed"]]
+    total = len(checks) or 1
+    score = round(len(passed) / total * 100)
+    max_sev = max((c["severity"] for c in issues), default=0)
+
+    if not issues:
+        verdict = "合规"
+    elif max_sev >= 4:
+        verdict = "仍有高风险"
+    elif score >= 60:
+        verdict = "基本合规，仍有改进点"
+    else:
+        verdict = "风险偏高"
+
+    # 改善点：本笔做到了、但历史上经常做不到（基线通过率低）的检查项。
+    improved = [
+        c["label"] for c in passed
+        if baseline_rates.get(c["key"], 100.0) < 60.0
+    ]
+
+    return {
+        "code": trade.code,
+        "name": trade.name,
+        "timestamp": trade.timestamp.isoformat(),
+        "side": trade.side,
+        "score": score,
+        "verdict": verdict,
+        "passed": [c["label"] for c in passed],
+        "issues": [{"label": c["label"], "note": c["note"], "severity": c["severity"]} for c in issues],
+        "improved_points": improved,
+    }
+
+
+def _improvement_and_watch_points(
+    resolved: list[dict],
+    new_issues: list[dict],
+    persistent: list[dict],
+    metric_changes: list[dict],
+    risk: dict,
+    baseline_rates: dict[str, float],
+    new_rates: dict[str, float],
+    cfg: AnalysisConfig,
+) -> tuple[list[str], list[str]]:
+    improvements: list[str] = []
+    watch: list[str] = []
+
+    if risk["direction"] == "improved":
+        improvements.append(f"综合风险分从 {risk['baseline']} 降到 {risk['current']}，风险敞口收窄。")
+    elif risk["direction"] == "worsened":
+        watch.append(f"综合风险分从 {risk['baseline']} 升到 {risk['current']}，新交易带来了新的风险。")
+
+    for item in resolved:
+        improvements.append(f"已消除「{item['title']}」问题。")
+
+    gap = cfg.reassess_improve_gap_pct
+    for key, label in _QUALITY_CHECK_LABELS.items():
+        before = baseline_rates.get(key)
+        after = new_rates.get(key)
+        if before is None or after is None:
+            continue
+        if after - before >= gap:
+            improvements.append(f"新交易在「{label}」上明显改善（{before:g}% → {after:g}%）。")
+
+    for item in new_issues:
+        watch.append(f"新增问题「{item['title']}」（严重度 {item['severity']}/4）。")
+
+    for item in persistent:
+        if int(item["severity"]) >= 3:
+            watch.append(f"「{item['title']}」问题仍未解决（严重度 {item['severity']}/4）。")
+
+    low_areas = [
+        f"{_QUALITY_CHECK_LABELS[key]}({new_rates[key]:g}%)"
+        for key in _QUALITY_CHECK_LABELS
+        if key in new_rates and new_rates[key] < 60.0
+    ]
+    if low_areas:
+        watch.append("新交易合规率仍偏低的环节：" + "、".join(low_areas) + "。")
+
+    return improvements, watch
+
+
+def _reassessment_summary(
+    risk: dict,
+    improvement_points: list[str],
+    watch_points: list[str],
+    new_trade_count: int,
+) -> str:
+    direction_text = {
+        "improved": "风险较此前有所改善",
+        "worsened": "风险较此前有所上升",
+        "flat": "风险与此前基本持平",
+    }[risk["direction"]]
+    return (
+        f"对最近 {new_trade_count} 笔新交易做风险重评："
+        f"{direction_text}（综合风险分 {risk['baseline']} → {risk['current']}），"
+        f"识别到 {len(improvement_points)} 个改善点、{len(watch_points)} 个待改善点。"
+    )
 
 
 def reconcile_holdings(

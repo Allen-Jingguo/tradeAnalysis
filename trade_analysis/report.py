@@ -71,6 +71,8 @@ def render_markdown(result: AnalysisResult) -> str:
             "",
         ])
 
+    _render_reassessment(lines, result.reassessment)
+
     lines.extend(["## 优化路径", ""])
     for rec in result.recommendations:
         lines.append(f"### {rec['stage']}：{rec['title']}")
@@ -128,6 +130,44 @@ def render_markdown(result: AnalysisResult) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _render_reassessment(lines: list, reassessment: dict) -> None:
+    if not reassessment or not reassessment.get("evaluated"):
+        return
+    risk = reassessment.get("risk_score", {})
+    lines.extend([
+        "## 新交易风险重评",
+        "",
+        f"- {reassessment.get('summary', '')}",
+        f"- 新交易笔数：{reassessment.get('new_trade_count', 0)}（其中买入 {reassessment.get('new_buy_count', 0)}）",
+        f"- 综合风险分：{risk.get('baseline', 0)} → {risk.get('current', 0)}（{risk.get('delta', 0):+d}）",
+        "",
+    ])
+
+    improvement_points = reassessment.get("improvement_points") or []
+    if improvement_points:
+        lines.append("### 改善点")
+        lines.extend(f"- {point}" for point in improvement_points)
+        lines.append("")
+
+    watch_points = reassessment.get("watch_points") or []
+    if watch_points:
+        lines.append("### 待改善点")
+        lines.extend(f"- {point}" for point in watch_points)
+        lines.append("")
+
+    assessments = reassessment.get("new_trade_assessments") or []
+    if assessments:
+        lines.extend(["### 新交易逐笔体检", "", "| 代码 | 时间 | 方向 | 评分 | 结论 | 待改进 |", "|---|---|---|---:|---|---|"])
+        for a in assessments:
+            issues = "、".join(i["label"] for i in a.get("issues", [])) or "无"
+            ts = str(a.get("timestamp", "")).replace("T", " ")[:16]
+            lines.append(
+                f"| {a.get('code', '')} {a.get('name', '')} | {ts} | {a.get('side', '')} | "
+                f"{a.get('score', 0)} | {a.get('verdict', '')} | {issues} |"
+            )
+        lines.append("")
 
 
 def _to_jsonable(obj):

@@ -120,7 +120,7 @@ function tradeAmount(trade) {
 function emptyResult() {
   return {
     trades: [], matched: [], open_positions: [], strategy_signals: [], stock_profiles: [],
-    findings: [], recommendations: [], holdings_recon: [],
+    findings: [], recommendations: [], holdings_recon: [], reassessment: {},
     metrics: { trade_count:0, matched_count:0, open_position_count:0, strategy_signal_count:0,
       strategy_alignment_rate:0, stock_risk_trade_count:0, realized_pnl:0,
       win_rate:0, profit_factor:0, max_single_trade_pct:0,
@@ -563,11 +563,59 @@ function renderLiveAnalysis() {
 
   fields.liveAnalysis.innerHTML = `
     ${windowHeader}
+    ${reassessmentSection()}
     <div class="live-section"><div class="live-section-title">交易缺点分析</div><div class="live-weakness-list">${weaknessHtml}</div></div>
     <div class="live-section"><div class="live-section-title">交易错误分析（窗口内 ${trades.length} 笔）</div><div class="live-trade-errors">${tradeErrors}</div></div>
     <div class="live-section"><div class="live-section-title">股票持仓建议</div><div class="live-positions">${positionHtml}</div></div>
     <div class="live-section live-section-priority"><div class="live-section-title">优先改进事项</div><div class="live-priorities">${priorityHtml}</div></div>
   `;
+}
+
+// ── 新交易出现后的风险重评 ──
+function reassessmentSection() {
+  const re = state.result.reassessment;
+  if (!re || !re.evaluated) return "";
+  const risk = re.risk_score || {};
+  const dirMap = {
+    improved: { text: "风险改善", cls: "buy" },
+    worsened: { text: "风险上升", cls: "warn" },
+    flat: { text: "风险持平", cls: "info" },
+  };
+  const dir = dirMap[risk.direction] || dirMap.flat;
+
+  const improvements = (re.improvement_points || []).map(p =>
+    `<div class="live-trade-error"><span class="live-trade-issues">✓ ${escapeHtml(p)}</span></div>`
+  ).join("") || `<div class="empty-state">暂无明显改善点</div>`;
+
+  const watch = (re.watch_points || []).slice(0, 8).map(p =>
+    `<div class="live-trade-error"><span class="live-trade-issues">! ${escapeHtml(p)}</span></div>`
+  ).join("") || `<div class="empty-state">暂无待改善点</div>`;
+
+  const perTrade = (re.new_trade_assessments || []).map(a => {
+    const issues = (a.issues || []).map(i => escapeHtml(i.label)).join("，") || "无";
+    const passed = (a.passed || []).join("，") || "无";
+    return `<div class="live-position-row">
+      <div class="live-position-name">${escapeHtml(a.code)} ${escapeHtml(a.name)} ${sideTag(a.side)}</div>
+      <div class="live-position-action">${escapeHtml(a.verdict)}（评分 ${a.score}）</div>
+      <div class="live-position-meta">已做到：${escapeHtml(passed)}</div>
+      <div class="live-position-reason">待改进：${escapeHtml(issues)}</div>
+    </div>`;
+  }).join("") || `<div class="empty-state">本次无新买入</div>`;
+
+  return `
+    <div class="live-section">
+      <div class="live-section-title">新交易风险重评
+        <span class="tag ${dir.cls}">${dir.text}</span>
+        <span class="tag info">综合风险分 ${risk.baseline} → ${risk.current}</span>
+      </div>
+      <div class="live-weakness-evidence">${escapeHtml(re.summary || "")}</div>
+      <div class="live-section-title" style="margin-top:8px">改善的点</div>
+      <div class="live-trade-errors">${improvements}</div>
+      <div class="live-section-title" style="margin-top:8px">待改善的点</div>
+      <div class="live-trade-errors">${watch}</div>
+      <div class="live-section-title" style="margin-top:8px">新交易逐笔体检</div>
+      <div class="live-positions">${perTrade}</div>
+    </div>`;
 }
 
 // ── Render all ──

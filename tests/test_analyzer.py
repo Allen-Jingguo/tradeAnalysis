@@ -401,6 +401,40 @@ class AnalyzerTest(unittest.TestCase):
         # target = 200 * (1 + 3*0.04) = 200 * 1.12 = 224.0
         self.assertAlmostEqual(trades[0].target_price, 224.0, places=2)
 
+    def test_reassessment_flags_improvement_and_remaining_risk_on_new_trades(self):
+        # First day: undisciplined trade (no plan, no stop, oversized, emotional).
+        # Second day: improved trade (plan, stop, target, calm, small size).
+        trades = [
+            TradeRecord(trade_id="1", timestamp=datetime(2026, 5, 6, 10, 0), code="300750",
+                        name="宁德时代", side="BUY", price=200.0, quantity=400,
+                        reason="追高买入", emotion="贪婪", plan="", stop_loss=0.0, target_price=0.0),
+            TradeRecord(trade_id="2", timestamp=datetime(2026, 5, 7, 10, 0), code="600519",
+                        name="贵州茅台", side="BUY", price=100.0, quantity=50,
+                        reason="按计划回踩买入", emotion="平静",
+                        plan="回踩95止损，目标120", stop_loss=95.0, target_price=120.0),
+        ]
+        result = analyze_trades(trades, AnalysisConfig(account_size=100000))
+        re = result.reassessment
+
+        self.assertTrue(re["evaluated"])
+        self.assertEqual(re["new_trade_count"], 1)
+        self.assertEqual(re["new_buy_count"], 1)
+        self.assertEqual(re["prior_trade_count"], 1)
+        # The new trade carries its own plan/stop/target, so it should score well.
+        new_assess = re["new_trade_assessments"][0]
+        self.assertEqual(new_assess["code"], "600519")
+        self.assertIn("交易计划", new_assess["passed"])
+        self.assertIn("止损价", new_assess["passed"])
+        # Risk should not be worse than baseline once the disciplined trade is added.
+        self.assertLessEqual(re["risk_score"]["current"], re["risk_score"]["baseline"])
+        self.assertGreaterEqual(len(re["improvement_points"]), 1)
+
+    def test_reassessment_skips_with_single_active_day(self):
+        trades = load_trades(ROOT / "data" / "sample_trades.csv")
+        # Force everything onto one notional cohort via explicit future cutoff.
+        result = analyze_trades(trades, new_since=datetime(2030, 1, 1))
+        self.assertFalse(result.reassessment["evaluated"])
+
     def test_import_trades_from_image_falls_back_when_deepseek_unconfigured(self):
         image_path = ROOT / "tests" / "_tmp_unused.png"
         image_path.parent.mkdir(parents=True, exist_ok=True)
