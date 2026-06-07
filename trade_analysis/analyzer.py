@@ -24,6 +24,10 @@ class AnalysisConfig:
     min_market_cap: float = 2_000_000_000.0
     max_volatility_pct: float = 8.0
     emotional_trade_ratio: float = 0.35
+    default_stop_loss_pct: float = 0.05
+    default_target_price_pct: float = 0.10
+    atr_stop_multiple: float = 1.5
+    atr_target_multiple: float = 3.0
 
 
 @dataclass(slots=True)
@@ -36,6 +40,11 @@ class AnalysisResult:
     metrics: dict
     findings: list[dict]
     recommendations: list[dict]
+    holdings_recon: list[dict] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.holdings_recon is None:
+            self.holdings_recon = []
 
 
 def analyze_trades(
@@ -43,15 +52,23 @@ def analyze_trades(
     config: AnalysisConfig | None = None,
     strategy_signals: list[StrategySignal] | None = None,
     stock_profiles: list[StockProfile] | None = None,
+    holdings: list[dict] | None = None,
 ) -> AnalysisResult:
     cfg = config or AnalysisConfig()
     signals = strategy_signals or []
     profiles = stock_profiles or []
+    _infer_exit_conditions(trades, signals, profiles, cfg)
     matched, open_positions = _match_round_trips(trades)
     metrics = _build_metrics(trades, matched, open_positions, signals, profiles, cfg)
     findings = _detect_findings(trades, matched, open_positions, signals, profiles, metrics, cfg)
     recommendations = _build_recommendations(findings, metrics)
-    return AnalysisResult(trades, matched, open_positions, signals, profiles, metrics, findings, recommendations)
+    holdings_recon = reconcile_holdings(open_positions, holdings or [])
+    metrics["holdings_recon_count"] = len(holdings_recon)
+    metrics["holdings_recon_mismatch_count"] = sum(1 for row in holdings_recon if row["status"] != "match")
+    return AnalysisResult(
+        trades, matched, open_positions, signals, profiles, metrics, findings, recommendations,
+        holdings_recon=holdings_recon,
+    )
 
 
 def _match_round_trips(trades: list[TradeRecord]) -> tuple[list[MatchedTrade], list[OpenPosition]]:
@@ -767,3 +784,162 @@ def _build_recommendations(findings: list[dict], metrics: dict) -> list[dict]:
         ],
     })
     return recs
+
+
+def _infer_exit_conditions(
+    trades: list[TradeRecord],
+    strategy_signals: list[StrategySignal],
+    stock_profiles: list[StockProfile],
+    cfg: AnalysisConfig,
+) -> None:
+    # Auto-fill stop_loss / target_price for BUY trades that don't carry them.
+    # Priority: nearest prior strategy signal → ATR/volatility band → fixed % default.
+    signals_by_code: dict[str, list[StrategySignal]] = defaultdict(list)
+    for sig in strategy_signals:
+        if sig.code:
+            signals_by_code[sig.code].append(sig)
+    for sigs in signals_by_code.values():
+        sigs.sort(key=lambda s: s.timestamp or datetime.min)
+
+    profile_by_code = {p.code: p for p in stock_profiles if p.code}
+
+    for trade in trades:
+        if not trade.is_buy:
+            continue
+        if trade.stop_loss > 0 and trade.target_price > 0:
+            continue
+        original_stop = trade.stop_loss
+        original_target = trade.target_price
+        source_tags: list[str] = []
+
+        sig = _latest_signal_at_or_before(signals_by_code.get(trade.code, []), trade.timestamp)
+        if sig:
+            if trade.stop_loss <= 0 and sig.stop_loss > 0:
+                trade.stop_loss = sig.stop_loss
+                source_tags.append("信号止损")
+            if trade.target_price <= 0 and sig.target_price > 0:
+                trade.target_price = sig.target_price
+                source_tags.append("信号目标")
+
+        if trade.stop_loss <= 0 or trade.target_price <= 0:
+            profile = profile_by_code.get(trade.code)
+            if profile and profile.volatility_pct > 0 and trade.price > 0:
+                atr_ratio = profile.volatility_pct / 100.0
+                if trade.stop_loss <= 0:
+                    trade.stop_loss = round(trade.price * (1 - cfg.atr_stop_multiple * atr_ratio), 4)
+                    source_tags.append("ATR止损")
+                if trade.target_price <= 0:
+                    trade.target_price = round(trade.price * (1 + cfg.atr_target_multiple * atr_ratio), 4)
+                    source_tags.append("ATR目标")
+
+        if trade.stop_loss <= 0 and trade.price > 0:
+            trade.stop_loss = round(trade.price * (1 - cfg.default_stop_loss_pct), 4)
+            source_tags.append("固定止损")
+        if trade.target_price <= 0 and trade.price > 0:
+            trade.target_price = round(trade.price * (1 + cfg.default_target_price_pct), 4)
+            source_tags.append("固定目标")
+
+        if trade.stop_loss != original_stop or trade.target_price != original_target:
+            trade.raw.setdefault("inferred_exit", {
+                "original_stop_loss": original_stop,
+                "original_target_price": original_target,
+                "sources": source_tags,
+            })
+            tag = "退出条件自动补录"
+            if tag not in trade.tags:
+                trade.tags.append(tag)
+
+
+def _latest_signal_at_or_before(signals: list[StrategySignal], when: datetime) -> StrategySignal | None:
+    latest: StrategySignal | None = None
+    for sig in signals:
+        if sig.timestamp is None or sig.timestamp <= when:
+            latest = sig
+        else:
+            break
+    return latest
+
+
+def reconcile_holdings(
+    open_positions: list[OpenPosition],
+    holdings: list[dict],
+) -> list[dict]:
+    # Reconcile FIFO-computed open positions against an actual holdings snapshot
+    # (typically OCR'd from the broker's 持仓 page).
+    computed_by_key: dict[str, OpenPosition] = {}
+    for pos in open_positions:
+        key = _holding_key(pos.code, pos.name)
+        computed_by_key[key] = pos
+
+    actual_by_key: dict[str, dict] = {}
+    for row in holdings:
+        key = _holding_key(str(row.get("code") or ""), str(row.get("name") or ""))
+        if not key:
+            continue
+        actual_by_key[key] = row
+
+    recon: list[dict] = []
+    for key, pos in computed_by_key.items():
+        actual = actual_by_key.get(key)
+        if actual is None:
+            recon.append({
+                "code": pos.code,
+                "name": pos.name,
+                "computed_quantity": pos.quantity,
+                "actual_quantity": 0,
+                "delta": -pos.quantity,
+                "computed_avg_cost": round(pos.avg_cost, 4),
+                "actual_avg_cost": 0.0,
+                "status": "missing_in_actual",
+                "note": "计算有持仓，实盘截图未出现",
+            })
+            continue
+        actual_qty = int(float(actual.get("quantity") or 0))
+        actual_cost = float(actual.get("avg_cost") or 0)
+        delta = actual_qty - pos.quantity
+        cost_diff = abs(actual_cost - pos.avg_cost) / pos.avg_cost if pos.avg_cost else 0
+        if delta == 0 and cost_diff <= 0.02:
+            status = "match"
+            note = "数量与成本一致"
+        elif delta == 0:
+            status = "cost_diff"
+            note = f"数量一致，成本偏差 {cost_diff*100:.2f}%"
+        else:
+            status = "qty_diff"
+            note = f"数量差 {delta:+d}"
+        recon.append({
+            "code": pos.code,
+            "name": pos.name,
+            "computed_quantity": pos.quantity,
+            "actual_quantity": actual_qty,
+            "delta": delta,
+            "computed_avg_cost": round(pos.avg_cost, 4),
+            "actual_avg_cost": round(actual_cost, 4),
+            "status": status,
+            "note": note,
+        })
+
+    for key, actual in actual_by_key.items():
+        if key in computed_by_key:
+            continue
+        actual_qty = int(float(actual.get("quantity") or 0))
+        recon.append({
+            "code": str(actual.get("code") or actual.get("name") or ""),
+            "name": str(actual.get("name") or ""),
+            "computed_quantity": 0,
+            "actual_quantity": actual_qty,
+            "delta": actual_qty,
+            "computed_avg_cost": 0.0,
+            "actual_avg_cost": round(float(actual.get("avg_cost") or 0), 4),
+            "status": "missing_in_computed",
+            "note": "实盘截图有持仓，交易流水未匹配到",
+        })
+
+    status_order = {"qty_diff": 0, "missing_in_computed": 1, "missing_in_actual": 2, "cost_diff": 3, "match": 4}
+    recon.sort(key=lambda row: (status_order.get(row["status"], 9), row["code"]))
+    return recon
+
+
+def _holding_key(code: str, name: str) -> str:
+    raw = (code or name or "").strip().upper()
+    return raw.replace(" ", "")

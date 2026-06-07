@@ -527,3 +527,112 @@ tbody tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--primary); }
 @media (max-width: 420px) {
   .metric-grid { grid-template-columns: 1fr; }
 }
+
+/* Sticky analysis header (tabs + topbar) keeps controls in view while scrolling */
+.analysis-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-card);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 8px;
+}
+.analysis-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 2px 0;
+  font-size: 12px;
+}
+.analysis-topbar:empty { display: none; }
+.topbar-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.topbar-pill.warn { background: #fff1f2; color: #b91c1c; }
+.topbar-pill.info { background: #fff7ed; color: #c2410c; }
+.topbar-tip {
+  margin-left: auto;
+  color: var(--text-secondary);
+  cursor: help;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+/* Tab badges */
+.analysis-segment { position: relative; }
+.tab-badge {
+  display: inline-block;
+  min-width: 16px;
+  padding: 0 4px;
+  margin-left: 4px;
+  background: #ef4444;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  vertical-align: middle;
+}
+.tab-badge:empty { display: none; }
+
+/* Tighter recommendation card so it folds well */
+.recommendation-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+}
+.recommendation-card > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.recommendation-card > summary::-webkit-details-marker { display: none; }
+.recommendation-card[open] { background: var(--primary-soft); border-color: var(--primary); }
+.recommendation-card ul { margin: 6px 0 0 16px; padding: 0; }
+.recommendation-card li { font-size: 13px; color: var(--text-secondary); margin: 2px 0; }
+
+/* Holdings recon table */
+.recon-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.recon-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.recon-table th, .recon-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+}
+.recon-table th { background: var(--primary-soft); color: var(--text-secondary); }
+.recon-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.recon-status {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.recon-status.recon-ok { background: #ecfdf5; color: #047857; }
+.recon-status.recon-warn { background: #fef2f2; color: #b91c1c; }
+.recon-status.recon-info { background: #fff7ed; color: #c2410c; }
+.recon-note { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.text-green { color: #059669; }
+.text-red { color: #dc2626; }

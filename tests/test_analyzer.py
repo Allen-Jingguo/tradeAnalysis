@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import datetime
 from pathlib import Path
 import sys
 from unittest import mock
@@ -8,16 +9,19 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from trade_analysis.analyzer import AnalysisConfig, analyze_trades
+from trade_analysis.analyzer import AnalysisConfig, analyze_trades, reconcile_holdings
 from trade_analysis.image_importer import (
     ImageImportResult,
     OCRBox,
+    _is_holdings_page,
     _is_non_stock_product,
     import_trades_from_image,
     merge_image_import_results,
+    parse_broker_holdings_boxes,
     parse_broker_order_boxes,
 )
 from trade_analysis.loader import load_stock_profiles, load_strategy_signals, load_trades
+from trade_analysis.models import OpenPosition, StockProfile, StrategySignal, TradeRecord
 from trade_analysis.webapp import ROOT, build_analysis_payload, build_clear_history_payload
 
 
@@ -272,6 +276,130 @@ class AnalyzerTest(unittest.TestCase):
         self.assertTrue(_is_non_stock_product("质押回购拆出"))
         self.assertFalse(_is_non_stock_product("光迅科技"))
         self.assertFalse(_is_non_stock_product("京东方A"))
+
+    def test_parse_broker_holdings_boxes_reads_wanlian_持仓_page(self):
+        # Mirrors the attached 万联证券 持仓 screenshot: two-line rows with
+        # 市值 | 盈亏 | 持仓/可用 | 成本/现价 column headers.
+        boxes = [
+            OCRBox("持仓股", 40, 440, 160, 480, 0.98),
+            OCRBox("市值", 60, 540, 180, 580, 0.98),
+            OCRBox("盈亏", 360, 540, 460, 580, 0.98),
+            OCRBox("持仓/可用", 560, 540, 720, 580, 0.96),
+            OCRBox("成本/现价", 800, 540, 960, 580, 0.96),
+            # Row 1: 通信ETF (cost=1.605, price=1.663, qty=85000)
+            OCRBox("通信ETF", 40, 620, 200, 660, 0.98),
+            OCRBox("4,950.10", 320, 620, 460, 660, 0.98),
+            OCRBox("85000", 580, 620, 700, 660, 0.99),
+            OCRBox("1.605", 820, 620, 940, 660, 1.0),
+            OCRBox("141,355.00", 40, 670, 240, 710, 0.98),
+            OCRBox("3.630%", 320, 670, 440, 710, 0.97),
+            OCRBox("85000", 580, 670, 700, 710, 0.99),
+            OCRBox("1.663", 820, 670, 940, 710, 1.0),
+            # Row 2: 德明利 (cost=643.743, price=630.500, qty=200)
+            OCRBox("德明利", 40, 760, 180, 800, 0.98),
+            OCRBox("-2,648.59", 300, 760, 460, 800, 0.96),
+            OCRBox("200", 600, 760, 680, 800, 0.99),
+            OCRBox("643.743", 800, 760, 960, 800, 1.0),
+            OCRBox("126,100.00", 40, 810, 240, 850, 0.98),
+            OCRBox("-2.060%", 300, 810, 460, 850, 0.97),
+            OCRBox("200", 600, 810, 680, 850, 0.99),
+            OCRBox("630.500", 800, 810, 960, 850, 1.0),
+            # Row 3: 京东方 A (cost=4.254, price=6.430, qty=3000)
+            OCRBox("京东方 A", 40, 1140, 220, 1180, 0.92),
+            OCRBox("6,526.70", 320, 1140, 460, 1180, 0.98),
+            OCRBox("3000", 580, 1140, 700, 1180, 0.99),
+            OCRBox("4.254", 820, 1140, 940, 1180, 1.0),
+            OCRBox("19,290.00", 40, 1190, 240, 1230, 0.98),
+            OCRBox("51.140%", 320, 1190, 460, 1230, 0.97),
+            OCRBox("3000", 580, 1190, 700, 1230, 0.99),
+            OCRBox("6.430", 820, 1190, 940, 1230, 1.0),
+            # Row 4: 标准券 (should be skipped as non-stock)
+            OCRBox("标准券", 40, 1400, 180, 1440, 0.98),
+            OCRBox("0.00", 320, 1400, 420, 1440, 0.99),
+            OCRBox("0", 620, 1400, 680, 1440, 0.99),
+            OCRBox("0.000", 820, 1400, 940, 1440, 1.0),
+            OCRBox("0.00", 40, 1450, 180, 1490, 0.98),
+            OCRBox("0.000%", 320, 1450, 420, 1490, 0.97),
+            OCRBox("0", 620, 1450, 680, 1490, 0.99),
+            OCRBox("100.000", 820, 1450, 940, 1490, 1.0),
+        ]
+        self.assertTrue(_is_holdings_page(boxes))
+
+        result = parse_broker_holdings_boxes(boxes)
+
+        self.assertEqual(len(result.holdings), 3)
+        names = [h["name"] for h in result.holdings]
+        self.assertIn("通信ETF", names)
+        self.assertIn("德明利", names)
+        self.assertIn("京东方A", names)
+        jdf = next(h for h in result.holdings if h["name"] == "京东方A")
+        self.assertEqual(jdf["quantity"], 3000)
+        self.assertAlmostEqual(jdf["avg_cost"], 4.254, places=3)
+        self.assertAlmostEqual(jdf["market_price"], 6.430, places=3)
+        dml = next(h for h in result.holdings if h["name"] == "德明利")
+        self.assertEqual(dml["quantity"], 200)
+        self.assertAlmostEqual(dml["avg_cost"], 643.743, places=3)
+        # 标准券 / 非股票品种 must land in skipped, not holdings.
+        self.assertTrue(any("标准券" in s["name"] for s in result.skipped))
+
+    def test_reconcile_holdings_flags_qty_and_missing_diffs(self):
+        positions = [
+            OpenPosition(code="光迅科技", name="光迅科技", quantity=200, avg_cost=210.0,
+                         first_buy_time=datetime(2026, 5, 26), last_buy_time=datetime(2026, 5, 26)),
+            OpenPosition(code="德明利", name="德明利", quantity=200, avg_cost=643.743,
+                         first_buy_time=datetime(2026, 5, 28), last_buy_time=datetime(2026, 5, 28)),
+            OpenPosition(code="云南锗业", name="云南锗业", quantity=100, avg_cost=80.0,
+                         first_buy_time=datetime(2026, 5, 1), last_buy_time=datetime(2026, 5, 1)),
+        ]
+        holdings = [
+            {"code": "光迅科技", "name": "光迅科技", "quantity": 300, "avg_cost": 223.625},
+            {"code": "德明利", "name": "德明利", "quantity": 200, "avg_cost": 643.743},
+            {"code": "京东方A", "name": "京东方A", "quantity": 3000, "avg_cost": 4.254},
+        ]
+
+        recon = reconcile_holdings(positions, holdings)
+
+        by_code = {row["code"]: row for row in recon}
+        self.assertEqual(by_code["光迅科技"]["status"], "qty_diff")
+        self.assertEqual(by_code["光迅科技"]["delta"], 100)
+        self.assertEqual(by_code["德明利"]["status"], "match")
+        self.assertEqual(by_code["云南锗业"]["status"], "missing_in_actual")
+        self.assertEqual(by_code["京东方A"]["status"], "missing_in_computed")
+
+    def test_analyze_trades_auto_fills_exit_conditions_three_tier(self):
+        # Tier 3 fallback (-5%/+10%): no signal, no profile.
+        trades = [
+            TradeRecord(trade_id="1", timestamp=datetime(2026, 5, 6, 10, 0), code="300750",
+                        name="宁德时代", side="BUY", price=200.0, quantity=100),
+        ]
+        result = analyze_trades(trades)
+        self.assertAlmostEqual(trades[0].stop_loss, 190.0, places=2)
+        self.assertAlmostEqual(trades[0].target_price, 220.0, places=2)
+        self.assertIn("退出条件自动补录", trades[0].tags)
+
+        # Tier 1 signal override.
+        trades = [
+            TradeRecord(trade_id="1", timestamp=datetime(2026, 5, 6, 10, 0), code="300750",
+                        name="宁德时代", side="BUY", price=200.0, quantity=100),
+        ]
+        signals = [StrategySignal(signal_id="s1", timestamp=datetime(2026, 5, 5),
+                                  code="300750", action="BUY",
+                                  stop_loss=192.0, target_price=235.0)]
+        analyze_trades(trades, strategy_signals=signals)
+        self.assertEqual(trades[0].stop_loss, 192.0)
+        self.assertEqual(trades[0].target_price, 235.0)
+
+        # Tier 2 ATR/volatility band.
+        trades = [
+            TradeRecord(trade_id="1", timestamp=datetime(2026, 5, 6, 10, 0), code="300750",
+                        name="宁德时代", side="BUY", price=200.0, quantity=100),
+        ]
+        profiles = [StockProfile(code="300750", volatility_pct=4.0)]
+        analyze_trades(trades, stock_profiles=profiles)
+        # stop = 200 * (1 - 1.5*0.04) = 200 * 0.94 = 188.0
+        self.assertAlmostEqual(trades[0].stop_loss, 188.0, places=2)
+        # target = 200 * (1 + 3*0.04) = 200 * 1.12 = 224.0
+        self.assertAlmostEqual(trades[0].target_price, 224.0, places=2)
 
     def test_import_trades_from_image_falls_back_when_deepseek_unconfigured(self):
         image_path = ROOT / "tests" / "_tmp_unused.png"

@@ -64,6 +64,8 @@ class ImageImportResult:
     duplicates: list[dict[str, Any]] = field(default_factory=list)
     boxes: list[OCRBox] = field(default_factory=list)
     engine: str = ""
+    holdings: list[dict[str, Any]] = field(default_factory=list)
+    page_type: str = "trades"  # "trades" or "holdings"
 
     @property
     def imported_count(self) -> int:
@@ -77,12 +79,20 @@ class ImageImportResult:
     def duplicate_count(self) -> int:
         return len(self.duplicates)
 
+    @property
+    def holdings_count(self) -> int:
+        return len(self.holdings)
+
 
 def import_trades_from_image(image_path: str | Path, engine: str = "auto", agent: str = "deepseek") -> ImageImportResult:
     path = Path(image_path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(path)
     boxes, used_engine = _read_ocr_boxes(path, engine)
+    if _is_holdings_page(boxes):
+        result = parse_broker_holdings_boxes(boxes)
+        result.engine = used_engine
+        return result
     result = parse_broker_order_boxes(boxes)
     agent_name = str(agent or "deepseek").lower().strip()
     if agent_name in {"deepseek", "deepseek-v4-pro", "deepseek_v4_pro", "auto"}:
@@ -115,7 +125,9 @@ def merge_image_import_results(results: list[ImageImportResult]) -> ImageImportR
     skipped: list[dict[str, Any]] = []
     duplicates: list[dict[str, Any]] = []
     boxes: list[OCRBox] = []
+    holdings: list[dict[str, Any]] = []
     seen: set[tuple] = set()
+    seen_holdings: set[str] = set()
     engines = []
 
     for result in results:
@@ -139,17 +151,26 @@ def merge_image_import_results(results: list[ImageImportResult]) -> ImageImportR
             seen.add(key)
             copied = dict(trade)
             trades.append(copied)
+        for row in result.holdings:
+            key_h = re.sub(r"\s+", "", str(row.get("code") or row.get("name") or "")).upper()
+            if not key_h or key_h in seen_holdings:
+                continue
+            seen_holdings.add(key_h)
+            holdings.append(dict(row))
 
     trades = _sort_trades_desc(trades)
     for idx, trade in enumerate(trades, 1):
         trade["trade_id"] = f"img-{idx}"
 
+    page_type = "holdings" if holdings and not trades else "trades"
     return ImageImportResult(
         trades=trades,
         skipped=skipped,
         duplicates=duplicates,
         boxes=boxes,
         engine="+".join(engines),
+        holdings=holdings,
+        page_type=page_type,
     )
 
 
@@ -275,6 +296,143 @@ def _parse_broker_execution_boxes(boxes: list[OCRBox]) -> ImageImportResult:
 
     trades = _sort_trades_desc(trades)
     return ImageImportResult(trades=trades, skipped=skipped, boxes=boxes)
+
+
+def parse_broker_holdings_boxes(boxes: list[OCRBox]) -> ImageImportResult:
+    # Parses 万联证券 持仓 page snapshot. Two-line layout per holding:
+    #   line A: 名称 | 盈亏金额 | 持仓数量 | 成本价
+    #   line B: 市值 | 盈亏百分比 | 可用数量 | 现价
+    # Column headers: 市值 | 盈亏 | 持仓/可用 | 成本/现价
+    text_boxes = [box for box in boxes if box.text.strip()]
+    header_boxes = [box for box in text_boxes if _is_holdings_header(box.text)]
+    header_y = _median([box.y for box in header_boxes]) if header_boxes else 0.0
+    qty_box = _find_header_box(header_boxes, "持仓/可用") or _find_header_box(header_boxes, "持仓") or _find_header_box(header_boxes, "可用")
+    cost_box = _find_header_box(header_boxes, "成本/现价") or _find_header_box(header_boxes, "成本") or _find_header_box(header_boxes, "现价")
+    pnl_box = _find_header_box(header_boxes, "盈亏")
+    value_box = _find_header_box(header_boxes, "市值")
+
+    qty_x = qty_box.x if qty_box else 580.0
+    cost_x = cost_box.x if cost_box else 820.0
+    pnl_x = pnl_box.x if pnl_box else 380.0
+    value_x = value_box.x if value_box else 130.0
+
+    data_boxes = [box for box in text_boxes if box.y > header_y + 24.0]
+
+    # Anchors are Chinese-text-only boxes in the leftmost column — one per holding.
+    # We require at least one CJK character and no digits to reject market-value
+    # numbers, percentages, and dates that share the leftmost column.
+    name_anchors: list[OCRBox] = []
+    for box in sorted(data_boxes, key=lambda b: b.y):
+        text = _clean_text(box.text)
+        if not text or box.x >= qty_x - 80:
+            continue
+        if re.search(r"\d", text):
+            continue
+        if not re.search(r"[一-鿿]", text):
+            continue
+        if _is_holdings_header(text):
+            continue
+        name_anchors.append(box)
+
+    holdings: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for i, name_box in enumerate(name_anchors):
+        name = _normalize_name(name_box.text.strip())
+        next_y = name_anchors[i + 1].y if i + 1 < len(name_anchors) else name_box.y + 220
+        band_top = name_box.y - 24
+        band_bot = next_y - 24
+        row_boxes = [b for b in data_boxes if band_top <= b.y <= band_bot]
+        row_text = " ".join(b.text for b in sorted(row_boxes, key=lambda b: (b.y, b.x)))
+
+        if _is_non_stock_product(name) or "标准券" in name:
+            skipped.append({"name": name, "reason": "非股票/ETF持仓品种，已跳过", "row_text": row_text})
+            continue
+
+        quantity = _column_top_number(row_boxes, qty_x, prefer="int")
+        avg_cost = _column_top_number(row_boxes, cost_x, prefer="float")
+        market_price = _column_bottom_number(row_boxes, cost_x, prefer="float", skip_value=avg_cost)
+        pnl = _column_top_number(row_boxes, pnl_x, prefer="float")
+        market_value = _column_bottom_number(row_boxes, value_x, prefer="float", skip_value=0)
+
+        if quantity <= 0:
+            skipped.append({"name": name, "reason": "持仓数量为 0", "row_text": row_text})
+            continue
+
+        holdings.append({
+            "code": name,
+            "name": name,
+            "quantity": int(quantity),
+            "avg_cost": float(avg_cost),
+            "market_price": float(market_price),
+            "market_value": float(market_value),
+            "pnl": float(pnl),
+            "raw_text": row_text,
+        })
+
+    return ImageImportResult(
+        trades=[], skipped=skipped, boxes=boxes,
+        holdings=holdings, page_type="holdings",
+    )
+
+
+def _is_holdings_page(boxes: list[OCRBox]) -> bool:
+    texts = [_clean_text(box.text) for box in boxes]
+    if any("成交日期" in t for t in texts) and any("成交量" in t for t in texts):
+        return False  # 历史成交 page
+    if any("持仓股" in t for t in texts):
+        return True
+    has_qty = any("持仓/可用" in t or ("持仓" in t and "数量" in t) for t in texts)
+    has_cost = any("成本/现价" in t or "成本价" in t or "摊薄成本" in t for t in texts)
+    has_market_value = any("市值" in t for t in texts)
+    return (has_qty and (has_cost or has_market_value)) or (has_cost and has_market_value)
+
+
+def _is_holdings_header(text: str) -> bool:
+    normalized = _clean_text(text)
+    return any(part in normalized for part in (
+        "市值", "盈亏", "持仓/可用", "成本/现价", "证券名称", "证券代码",
+        "持仓数量", "可用数量", "成本价", "摊薄成本", "参考成本",
+        "现价", "最新价", "市价", "浮动盈亏", "盈亏比例", "持仓",
+    ))
+
+
+def _column_numbers(row_boxes: list[OCRBox], target_x: float, x_tolerance: float = 110.0) -> list[tuple[float, float]]:
+    candidates: list[tuple[float, float]] = []
+    for box in row_boxes:
+        if abs(box.x - target_x) > x_tolerance:
+            continue
+        text = _clean_text(box.text)
+        if not _is_numeric_token(text):
+            continue
+        number = _parse_number(text)
+        if number is None:
+            continue
+        candidates.append((box.y, number))
+    candidates.sort(key=lambda item: item[0])
+    return candidates
+
+
+def _column_top_number(row_boxes: list[OCRBox], target_x: float, prefer: str) -> float:
+    candidates = _column_numbers(row_boxes, target_x)
+    if not candidates:
+        return 0.0
+    value = candidates[0][1]
+    return float(int(round(value))) if prefer == "int" else value
+
+
+def _column_bottom_number(
+    row_boxes: list[OCRBox], target_x: float, prefer: str, skip_value: float = 0.0,
+) -> float:
+    candidates = _column_numbers(row_boxes, target_x)
+    if not candidates:
+        return 0.0
+    # Prefer the box with the largest y that is materially different from skip_value
+    # (avoids returning the same top value when only one row was OCR'd).
+    for _, value in reversed(candidates):
+        if abs(value - skip_value) > max(1e-6, abs(skip_value) * 0.001):
+            return float(int(round(value))) if prefer == "int" else value
+    value = candidates[-1][1]
+    return float(int(round(value))) if prefer == "int" else value
 
 
 def _detect_table_layout(boxes: list[OCRBox]) -> TableLayout:
