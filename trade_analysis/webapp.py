@@ -134,16 +134,36 @@ def build_analysis_payload(payload: dict[str, Any]) -> dict[str, Any]:
     trades = load_trades(_resolve_source(input_source))
     strategy_signals = load_strategy_signals(_resolve_source(strategy_source)) if use_strategy else []
     stock_profiles = load_stock_profiles(_resolve_source(stock_source)) if use_stock else []
-    result = analyze_trades(trades, cfg, strategy_signals=strategy_signals, stock_profiles=stock_profiles)
+    holdings = _load_recent_holdings(payload.get("holdings_path"))
+    result = analyze_trades(
+        trades, cfg,
+        strategy_signals=strategy_signals,
+        stock_profiles=stock_profiles,
+        holdings=holdings,
+    )
 
     return {
         "sources": {
             "input": input_source,
             "strategy": strategy_source if use_strategy else "",
             "stock": stock_source if use_stock else "",
+            "holdings": str(ROOT / "output" / "image_imported_holdings.json") if holdings else "",
         },
         "result": _to_jsonable(result),
     }
+
+
+def _load_recent_holdings(explicit_path: Any) -> list[dict[str, Any]]:
+    path = Path(str(explicit_path)) if explicit_path else ROOT / "output" / "image_imported_holdings.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    return []
 
 
 def build_image_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -164,6 +184,9 @@ def build_image_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 pass
     result = merge_image_import_results(results)
     out = write_imported_csv(result, ROOT / "output" / "image_imported_trades.csv")
+    holdings_path = ""
+    if result.holdings:
+        holdings_path = str(_write_holdings_json(result.holdings))
     return {
         "csv_path": str(out),
         "engine": result.engine,
@@ -171,15 +194,27 @@ def build_image_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "imported_count": result.imported_count,
         "skipped_count": result.skipped_count,
         "duplicate_count": result.duplicate_count,
+        "holdings_count": result.holdings_count,
+        "holdings_path": holdings_path,
+        "page_type": result.page_type,
         "trades": result.trades,
         "skipped": result.skipped,
         "duplicates": result.duplicates,
+        "holdings": result.holdings,
     }
+
+
+def _write_holdings_json(holdings: list[dict[str, Any]]) -> Path:
+    out = ROOT / "output" / "image_imported_holdings.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(holdings, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
 
 
 def build_clear_history_payload() -> dict[str, Any]:
     generated_files = [
         ROOT / "output" / "image_imported_trades.csv",
+        ROOT / "output" / "image_imported_holdings.json",
     ]
     deleted = []
     for path in generated_files:

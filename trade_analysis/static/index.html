@@ -133,13 +133,17 @@
           <div class="risk-badge" id="risk-meter"></div>
         </div>
 
-        <div class="analysis-tabs">
-          <div class="segmented" role="tablist" aria-label="分析结果视图">
-            <button type="button" class="analysis-segment active" data-analysis-view="trade">当前交易</button>
-            <button type="button" class="analysis-segment" data-analysis-view="findings">问题</button>
-            <button type="button" class="analysis-segment" data-analysis-view="recommendations">建议</button>
-            <button type="button" class="analysis-segment" data-analysis-view="live">实盘分析</button>
+        <div class="analysis-sticky" id="analysis-sticky">
+          <div class="analysis-tabs">
+            <div class="segmented" role="tablist" aria-label="分析结果视图">
+              <button type="button" class="analysis-segment active" data-analysis-view="trade">当前交易</button>
+              <button type="button" class="analysis-segment" data-analysis-view="findings">问题<span class="tab-badge" id="tab-badge-findings"></span></button>
+              <button type="button" class="analysis-segment" data-analysis-view="recommendations">建议</button>
+              <button type="button" class="analysis-segment" data-analysis-view="recon">持仓对账<span class="tab-badge" id="tab-badge-recon"></span></button>
+              <button type="button" class="analysis-segment" data-analysis-view="live">实盘分析</button>
+            </div>
           </div>
+          <div class="analysis-topbar" id="analysis-topbar"></div>
         </div>
 
         <div class="analysis-body">
@@ -156,6 +160,13 @@
 
           <div class="analysis-panel" data-analysis-panel="recommendations">
             <div class="recommendation-list" id="recommendation-list"></div>
+          </div>
+
+          <div class="analysis-panel" data-analysis-panel="recon">
+            <div class="recon-summary" id="recon-summary"></div>
+            <div class="recon-list" id="recon-list">
+              <div class="empty-state">上传持仓页截图后自动生成对账结果</div>
+            </div>
           </div>
 
           <div class="analysis-panel" data-analysis-panel="live">

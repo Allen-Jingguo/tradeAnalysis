@@ -52,6 +52,11 @@ const fields = {
   findingList: document.getElementById("finding-list"),
   recommendationList: document.getElementById("recommendation-list"),
   liveAnalysis: document.getElementById("live-analysis"),
+  reconSummary: document.getElementById("recon-summary"),
+  reconList: document.getElementById("recon-list"),
+  analysisTopbar: document.getElementById("analysis-topbar"),
+  tabBadgeFindings: document.getElementById("tab-badge-findings"),
+  tabBadgeRecon: document.getElementById("tab-badge-recon"),
 };
 
 const viewColumns = {
@@ -115,10 +120,11 @@ function tradeAmount(trade) {
 function emptyResult() {
   return {
     trades: [], matched: [], open_positions: [], strategy_signals: [], stock_profiles: [],
-    findings: [], recommendations: [],
+    findings: [], recommendations: [], holdings_recon: [],
     metrics: { trade_count:0, matched_count:0, open_position_count:0, strategy_signal_count:0,
       strategy_alignment_rate:0, stock_risk_trade_count:0, realized_pnl:0,
-      win_rate:0, profit_factor:0, max_single_trade_pct:0 },
+      win_rate:0, profit_factor:0, max_single_trade_pct:0,
+      holdings_recon_count:0, holdings_recon_mismatch_count:0 },
   };
 }
 
@@ -390,9 +396,13 @@ function renderFindings() {
   const trade = selectedTrade();
   fields.findingCount.textContent = `${state.result.findings.length} 项发现`;
   renderFindingSummary();
+  // Expand only the first / first related finding by default to reduce scroll.
+  let expandedOnce = false;
   fields.findingList.innerHTML = state.result.findings.map(f => {
     const related = findingRelatedToTrade(f, trade);
-    return `<details class="finding-card${related?" related":""}">
+    const open = !expandedOnce && (related || true);
+    if (open) expandedOnce = true;
+    return `<details class="finding-card${related?" related":""}"${open?" open":""}>
       <summary><div class="finding-title">${escapeHtml(f.title)}</div>${severityTag(f.severity)}</summary>
       <div class="finding-body">
         <div>${escapeHtml(f.evidence)}</div>
@@ -400,15 +410,88 @@ function renderFindings() {
       </div>
     </details>`;
   }).join("") || `<div class="empty-state">暂无明显问题</div>`;
+  if (fields.tabBadgeFindings) {
+    const n = state.result.findings.length;
+    fields.tabBadgeFindings.textContent = n ? n : "";
+  }
 }
 
 // ── Recommendations ──
 function renderRecommendations() {
-  fields.recommendationList.innerHTML = state.result.recommendations.map(item => `
-    <article class="recommendation-card">
-      <div class="recommendation-title">${escapeHtml(item.stage)}：${escapeHtml(item.title)}</div>
+  // Collapsible so the panel doesn't force scrolling.
+  let expandedOnce = false;
+  fields.recommendationList.innerHTML = state.result.recommendations.map(item => {
+    const open = !expandedOnce;
+    expandedOnce = true;
+    return `<details class="recommendation-card"${open?" open":""}>
+      <summary><div class="recommendation-title">${escapeHtml(item.stage)}：${escapeHtml(item.title)}</div></summary>
       <ul>${item.actions.map(a => `<li>${escapeHtml(a)}</li>`).join("")}</ul>
-    </article>`).join("") || `<div class="empty-state">暂无操作建议</div>`;
+    </details>`;
+  }).join("") || `<div class="empty-state">暂无操作建议</div>`;
+}
+
+// ── Holdings recon ──
+const RECON_STATUS = {
+  match: { label: "一致", cls: "recon-ok" },
+  qty_diff: { label: "数量差", cls: "recon-warn" },
+  cost_diff: { label: "成本差", cls: "recon-info" },
+  missing_in_actual: { label: "实盘缺", cls: "recon-warn" },
+  missing_in_computed: { label: "计算缺", cls: "recon-warn" },
+};
+
+function renderRecon() {
+  const recon = state.result.holdings_recon || [];
+  const mismatch = recon.filter(r => r.status !== "match");
+  if (fields.tabBadgeRecon) fields.tabBadgeRecon.textContent = mismatch.length || "";
+
+  if (fields.reconSummary) {
+    if (!recon.length) {
+      fields.reconSummary.innerHTML = "";
+    } else {
+      const ok = recon.length - mismatch.length;
+      fields.reconSummary.innerHTML = `
+        <div class="summary-card"><span>对账记录</span><strong>${recon.length}</strong></div>
+        <div class="summary-card"><span>一致</span><strong>${ok}</strong></div>
+        <div class="summary-card"><span>差异</span><strong class="${mismatch.length?"text-orange":""}">${mismatch.length}</strong></div>
+      `;
+    }
+  }
+  if (!recon.length) {
+    fields.reconList.innerHTML = `<div class="empty-state">上传持仓页截图后自动生成对账结果</div>`;
+    return;
+  }
+  fields.reconList.innerHTML = `<table class="recon-table"><thead><tr>
+    <th>代码/名称</th><th>计算持仓</th><th>实盘持仓</th><th>差</th><th>计算成本</th><th>实盘成本</th><th>状态</th>
+  </tr></thead><tbody>${recon.map(r => {
+    const status = RECON_STATUS[r.status] || { label: r.status, cls: "" };
+    const deltaCls = r.delta > 0 ? "text-green" : r.delta < 0 ? "text-red" : "";
+    return `<tr class="${status.cls}">
+      <td>${escapeHtml(r.code || r.name)}</td>
+      <td class="num">${formatCompact(r.computed_quantity)}</td>
+      <td class="num">${formatCompact(r.actual_quantity)}</td>
+      <td class="num ${deltaCls}">${r.delta>0?"+":""}${formatCompact(r.delta)}</td>
+      <td class="num">${formatNumber(r.computed_avg_cost, 3)}</td>
+      <td class="num">${formatNumber(r.actual_avg_cost, 3)}</td>
+      <td><span class="recon-status ${status.cls}">${status.label}</span><div class="recon-note">${escapeHtml(r.note || "")}</div></td>
+    </tr>`;
+  }).join("")}</tbody></table>`;
+}
+
+// ── Sticky top summary above the tabs ──
+function renderAnalysisTopbar() {
+  if (!fields.analysisTopbar) return;
+  const { findings, metrics } = state.result;
+  const high = findings.filter(f => Number(f.severity||0) >= 4).length;
+  const med = findings.filter(f => Number(f.severity||0) === 3).length;
+  const top = findings[0];
+  const mismatch = (state.result.holdings_recon || []).filter(r => r.status !== "match").length;
+  const parts = [];
+  if (high) parts.push(`<span class="topbar-pill warn">高 ${high}</span>`);
+  if (med) parts.push(`<span class="topbar-pill info">中 ${med}</span>`);
+  if (mismatch) parts.push(`<span class="topbar-pill warn">持仓差异 ${mismatch}</span>`);
+  if (metrics.strategy_signal_count) parts.push(`<span class="topbar-pill">策略一致率 ${formatNumber(metrics.strategy_alignment_rate)}%</span>`);
+  const tip = top ? `<span class="topbar-tip" title="${escapeHtml(top.advice||"")}">⚑ ${escapeHtml(top.title)}</span>` : "";
+  fields.analysisTopbar.innerHTML = parts.length || tip ? `${parts.join(" ")}${tip}` : "";
 }
 
 // ── Live Analysis ──
@@ -503,6 +586,8 @@ function renderAll() {
   renderSelectedTrade();
   renderFindings();
   renderRecommendations();
+  renderRecon();
+  renderAnalysisTopbar();
   renderLiveAnalysis();
   renderAnalysisView();
 }
