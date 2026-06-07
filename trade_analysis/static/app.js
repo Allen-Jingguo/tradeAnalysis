@@ -205,8 +205,16 @@ function initPagination() {
 
 // ── Table ──
 function dataForCurrentView() {
-  if (state.currentView === "matched") return state.result.matched;
-  if (state.currentView === "open") return state.result.open_positions;
+  if (state.currentView === "matched") {
+    return [...state.result.matched].sort((a, b) =>
+      String(b.sell_time || b.buy_time || "").localeCompare(String(a.sell_time || a.buy_time || ""))
+    );
+  }
+  if (state.currentView === "open") {
+    return [...state.result.open_positions].sort((a, b) =>
+      String(b.first_buy_time || "").localeCompare(String(a.first_buy_time || ""))
+    );
+  }
   const allTrades = state.result.trades.map(t => ({ ...t, amount: tradeAmount(t) }));
   // For trades view: show only current page's day, sorted descending by timestamp
   const allDays = getTradeDays();
@@ -564,7 +572,7 @@ function prepareImageImport() {
     fields.importResult.textContent = "请先选择图片文件，或输入本地图片路径。";
     return;
   }
-  state.pendingImageImport = { files, paths, agent: fields.imageAgent ? fields.imageAgent.value : "local" };
+  state.pendingImageImport = { files, paths, agent: fields.imageAgent ? fields.imageAgent.value : "deepseek-v4-pro" };
   const count = files.length || paths.length;
   fields.imageSummary.textContent = `待确认 ${count} 张图片`;
   setStatus("待确认");
@@ -609,7 +617,13 @@ async function importImage(pending) {
 
     const dup = payload.duplicate_count ? `，去重 ${payload.duplicate_count} 条` : "";
     const skip = payload.skipped_count ? `，跳过 ${payload.skipped_count} 条` : "";
-    fields.importResult.textContent = `已识别 ${payload.imported_count} 条成交记录${dup}${skip}。OCR：${payload.engine}`;
+    const engine = String(payload.engine || "");
+    const fallbackHint = engine.includes("deepseek-v4-pro-unconfigured")
+      ? "（未配置 DEEPSEEK_API_KEY，已回退到本地 OCR）"
+      : engine.includes("deepseek-v4-pro-fallback")
+        ? "（DeepSeek Agent 调用失败，已回退到本地 OCR）"
+        : "";
+    fields.importResult.textContent = `已识别 ${payload.imported_count} 条成交记录${dup}${skip}。OCR：${engine}${fallbackHint}`;
     fields.imageMain.textContent = `已识别 ${payload.imported_count} 条`;
     fields.imageSummary.textContent = `已识别 ${payload.imported_count} 条 · 去重 ${payload.duplicate_count||0} 条`;
     fields.imageStatus && (fields.imageStatus.innerHTML = `<span class="dot"></span>已识别`);

@@ -78,17 +78,17 @@ class ImageImportResult:
         return len(self.duplicates)
 
 
-def import_trades_from_image(image_path: str | Path, engine: str = "auto", agent: str = "local") -> ImageImportResult:
+def import_trades_from_image(image_path: str | Path, engine: str = "auto", agent: str = "deepseek") -> ImageImportResult:
     path = Path(image_path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(path)
     boxes, used_engine = _read_ocr_boxes(path, engine)
     result = parse_broker_order_boxes(boxes)
-    agent_name = str(agent or "local").lower().strip()
-    if agent_name in {"deepseek", "deepseek-v4-pro", "deepseek_v4_pro"}:
+    agent_name = str(agent or "deepseek").lower().strip()
+    if agent_name in {"deepseek", "deepseek-v4-pro", "deepseek_v4_pro", "auto"}:
         result, agent_engine = _apply_deepseek_agent(boxes, result)
         used_engine = f"{used_engine}+{agent_engine}"
-    elif agent_name not in {"", "auto", "local", "none"}:
+    elif agent_name not in {"", "local", "none"}:
         raise ValueError(f"unsupported OCR agent: {agent}")
     result.engine = used_engine
     return result
@@ -138,8 +138,11 @@ def merge_image_import_results(results: list[ImageImportResult]) -> ImageImportR
                 continue
             seen.add(key)
             copied = dict(trade)
-            copied["trade_id"] = f"img-{len(trades) + 1}"
             trades.append(copied)
+
+    trades = _sort_trades_desc(trades)
+    for idx, trade in enumerate(trades, 1):
+        trade["trade_id"] = f"img-{idx}"
 
     return ImageImportResult(
         trades=trades,
@@ -209,6 +212,7 @@ def parse_broker_order_boxes(boxes: list[OCRBox]) -> ImageImportResult:
             raw=raw,
         ))
 
+    trades = _sort_trades_desc(trades)
     return ImageImportResult(trades=trades, skipped=skipped, boxes=boxes)
 
 
@@ -269,6 +273,7 @@ def _parse_broker_execution_boxes(boxes: list[OCRBox]) -> ImageImportResult:
             raw=raw,
         ))
 
+    trades = _sort_trades_desc(trades)
     return ImageImportResult(trades=trades, skipped=skipped, boxes=boxes)
 
 
@@ -426,6 +431,9 @@ def _apply_deepseek_agent(boxes: list[OCRBox], fallback: ImageImportResult) -> t
                     "reason": str(item.get("reason") or "DeepSeek Agent 跳过"),
                 })
         if trades:
+            trades = _sort_trades_desc(trades)
+            for idx, trade in enumerate(trades, 1):
+                trade["trade_id"] = f"img-{idx}"
             return ImageImportResult(trades=trades, skipped=skipped, boxes=boxes), "deepseek-v4-pro"
     except Exception:
         return fallback, "deepseek-v4-pro-fallback"
@@ -741,11 +749,13 @@ def _median(values: list[float]) -> float:
 
 def _is_non_stock_product(name: str) -> bool:
     normalized = re.sub(r"\s+", "", name).upper()
-    if re.fullmatch(r"R-\d{3}", normalized):
+    # OCR noise: capital O frequently misread as digit 0, and vice versa.
+    digit_form = normalized.replace("O", "0")
+    if re.fullmatch(r"R-?\d{3}", digit_form):
         return True
-    if re.fullmatch(r"GC\d{3}", normalized):
+    if re.fullmatch(r"GC\d{3}", digit_form):
         return True
-    return any(keyword in normalized for keyword in ("逆回购", "国债回购"))
+    return any(keyword in normalized for keyword in ("逆回购", "国债回购", "质押回购", "拆出质押", "质押购回"))
 
 
 def _safe_float(value: Any) -> float:
@@ -753,6 +763,12 @@ def _safe_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _sort_trades_desc(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def key(trade: dict[str, Any]) -> str:
+        return str(trade.get("timestamp") or "")
+    return sorted(trades, key=key, reverse=True)
 
 
 def _trade_duplicate_key(trade: dict[str, Any]) -> tuple:

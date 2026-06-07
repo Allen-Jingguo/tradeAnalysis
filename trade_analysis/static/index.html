@@ -80,8 +80,8 @@
         <label><span>图片路径</span><textarea id="image-path" name="image_path" rows="2" autocomplete="off"></textarea></label>
         <label><span>识别模式</span>
           <select id="image-agent" name="image_agent">
-            <option value="local">本地 OCR</option>
-            <option value="deepseek-v4-pro">DeepSeek V4 Pro Agent</option>
+            <option value="deepseek-v4-pro" selected>DeepSeek V4 Pro Agent（推荐）</option>
+            <option value="local">本地 OCR（无密钥时回退）</option>
           </select>
         </label>
         <button class="btn btn-primary" type="submit" id="analyze-button">
