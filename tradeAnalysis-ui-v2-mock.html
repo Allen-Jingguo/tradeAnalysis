@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>tradeAnalysis UI V2 Mock</title>
+<style>
+:root {
+  --bg-page: #f6f8fb;
+  --bg-card: #ffffff;
+  --border-subtle: #e5e7eb;
+  --border-strong: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --primary: #2563eb;
+  --primary-soft: #eff6ff;
+  --success: #16a34a;
+  --success-soft: #dcfce7;
+  --danger: #dc2626;
+  --danger-soft: #fee2e2;
+  --danger-bg: #fef2f2;
+  --warning: #f97316;
+  --warning-soft: #ffedd5;
+  --purple-soft: #f3e8ff;
+  --teal-soft: #ccfbf1;
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 12px 32px rgba(15, 23, 42, 0.03);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 15% 0%, rgba(37, 99, 235, 0.06), transparent 28%),
+    radial-gradient(circle at 85% 5%, rgba(220, 38, 38, 0.05), transparent 24%),
+    var(--bg-page);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.page-header {
+  height: 72px;
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid var(--border-subtle);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.brand { display: flex; align-items: center; gap: 14px; }
+.logo {
+  width: 34px; height: 34px; border-radius: 10px;
+  background: linear-gradient(135deg, #dbeafe, #fff);
+  display: grid; place-items: center;
+  color: var(--primary); font-size: 22px; font-weight: 900;
+}
+.brand-line { display: flex; align-items: baseline; gap: 24px; }
+.brand h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+.brand p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.btn, .pill {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.btn-danger { color: var(--danger); border-color: #fecaca; background: #fff; }
+.btn-primary { color: #fff; border-color: var(--primary); background: var(--primary); box-shadow: 0 10px 22px rgba(37, 99, 235, .18); }
+.pill-success { color: #15803d; background: #f0fdf4; border-color: #bbf7d0; }
+
+.container {
+  max-width: 1760px;
+  margin: 0 auto;
+  padding: 20px 32px 40px;
+}
+.top-grid {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.45fr) minmax(280px, 0.55fr) minmax(360px, 0.72fr);
+  gap: 16px;
+}
+.card {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+.hero-card {
+  min-height: 126px;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) 1px minmax(260px, .7fr);
+  overflow: hidden;
+  background: linear-gradient(90deg, #fff 0%, #fff 46%, #fff8f8 100%);
+  border-color: #fecaca;
+}
+.hero-icon-wrap {
+  display: grid;
+  place-items: center;
+  border-right: 1px solid #fee2e2;
+  background: linear-gradient(180deg, #fff, #fff5f5);
+}
+.hero-shield {
+  width: 54px; height: 54px; border-radius: 18px;
+  background: var(--danger);
+  color: #fff;
+  display: grid; place-items: center;
+  font-size: 28px; font-weight: 900;
+  box-shadow: 0 14px 30px rgba(220, 38, 38, .25);
+}
+.hero-main {
+  padding: 22px 26px;
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+}
+.hero-main h2 {
+  margin: 0 0 12px;
+  font-size: 28px;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+.hero-main h2 span { color: var(--danger); }
+.hero-main p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 650;
+}
+.hero-main b { color: var(--danger); }
+.divider {
+  width: 1px;
+  height: 66px;
+  background: #fee2e2;
+  align-self: center;
+}
+.hero-advice {
+  padding: 22px 24px;
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+}
+.advice-label {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 760;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.hero-advice strong {
+  font-size: 18px;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.utility-card {
+  min-height: 126px;
+  padding: 20px;
+}
+.utility-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.utility-title {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 17px;
+  font-weight: 820;
+}
+.icon-box {
+  width: 32px; height: 32px; border-radius: 10px;
+  display: grid; place-items: center;
+  font-size: 18px;
+}
+.icon-blue { color: var(--primary); background: #dbeafe; }
+.icon-purple { color: #7c3aed; background: #ede9fe; }
+.upload-mini {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  font-weight: 750;
+}
+.utility-main {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.utility-status {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dot {
+  width: 8px; height: 8px; border-radius: 999px;
+  background: var(--success);
+  box-shadow: 0 0 0 4px #f0fdf4;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+.metric-card {
+  min-height: 128px;
+  padding: 20px;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+}
+.metric-icon {
+  width: 58px; height: 58px; border-radius: 999px;
+  display: grid; place-items: center;
+  font-size: 28px;
+}
+.bg-green { background: #dcfce7; color: #16a34a; }
+.bg-blue { background: #dbeafe; color: #2563eb; }
+.bg-purple { background: #f3e8ff; color: #7c3aed; }
+.bg-orange { background: #ffedd5; color: #f97316; }
+.bg-teal { background: #ccfbf1; color: #0f766e; }
+.bg-red { background: #fee2e2; color: #dc2626; }
+.metric-label {
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 760;
+}
+.metric-value {
+  margin-top: 5px;
+  font-size: 29px;
+  line-height: 1.1;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.metric-help {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.text-green { color: #16a34a; }
+.text-red { color: #dc2626; }
+.text-orange { color: #f97316; }
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(720px, 1.5fr) minmax(460px, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+.panel-header {
+  padding: 18px 20px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.panel-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 850;
+  letter-spacing: -0.03em;
+}
+.panel-subtitle {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+.toolbar { display: flex; gap: 8px; align-items: center; }
+.tool-btn {
+  height: 38px;
+  padding: 0 13px;
+  border-radius: 9px;
+  border: 1px solid var(--border-subtle);
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-weight: 720;
+}
+.segmented {
+  display: inline-flex;
+  gap: 4px;
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 4px;
+}
+.segmented button {
+  border: 0;
+  min-width: 72px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 750;
+  font-size: 14px;
+}
+.segmented button.active {
+  color: #fff;
+  background: var(--primary);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, .18);
+}
+.table-tabs {
+  padding: 0 20px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.table-scroll { overflow-x: auto; border-top: 1px solid var(--border-subtle); }
+table {
+  width: 100%;
+  min-width: 980px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+thead th {
+  height: 46px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 820;
+  text-align: left;
+  padding: 0 16px;
+}
+tbody td {
+  height: 52px;
+  border-bottom: 1px solid #eef2f7;
+  padding: 0 16px;
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 560;
+  white-space: nowrap;
+}
+tbody tr:hover td { background: #f8fafc; }
+tbody tr.selected td { background: #eff6ff; }
+tbody tr.selected td:first-child {
+  box-shadow: inset 4px 0 0 var(--primary);
+}
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.badge {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 820;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge-buy { background: #ecfdf5; color: #16a34a; border-color: #86efac; }
+.badge-sell { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
+.badge-risk { background: #fee2e2; color: #dc2626; border-color: #fecaca; }
+.badge-soft-red { background: #fff1f2; color: #dc2626; }
+.emotion-warning { color: #f97316; font-weight: 820; }
+.emotion-danger { color: #dc2626; font-weight: 820; }
+.table-footer {
+  height: 70px;
+  padding: 0 24px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 650;
+}
+.pagination {
+  display: flex; align-items: center; gap: 8px;
+}
+.page-btn {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  display: grid; place-items: center;
+  background: #fff;
+}
+.page-btn.active {
+  color: #fff; background: var(--primary); border-color: var(--primary);
+}
+.page-size {
+  justify-self: end;
+  height: 36px;
+  min-width: 120px;
+  border-radius: 9px;
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+}
+
+.analysis-card { overflow: hidden; }
+.analysis-top {
+  padding: 18px 20px 14px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.analysis-tabs {
+  padding: 0 20px 12px;
+}
+.analysis-tabs .segmented {
+  width: 100%;
+}
+.analysis-tabs button {
+  flex: 1;
+  min-width: 0;
+}
+.analysis-tabs button.active {
+  color: var(--primary);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #bfdbfe;
+}
+.analysis-body { padding: 0 20px 20px; }
+.risk-alert {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: 12px;
+  color: #991b1b;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.detail-card {
+  margin-top: 12px;
+  padding: 18px;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  background: #fff;
+}
+.detail-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+}
+.stock-title {
+  font-size: 22px;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+.detail-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 26px;
+}
+.detail-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+.detail-label {
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+.detail-value {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+.detail-link { color: var(--primary); font-weight: 850; }
+.detail-danger { color: var(--danger); font-weight: 850; }
+.detail-notes {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 10px;
+}
+.note-line {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.issue-list {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+.issue-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid #fee2e2;
+  background: linear-gradient(90deg, #fff, #fff7f7);
+}
+.issue-index {
+  width: 30px; height: 30px; border-radius: 999px;
+  display: grid; place-items: center;
+  background: var(--danger);
+  color: white;
+  font-size: 14px;
+  font-weight: 850;
+}
+.issue-title {
+  font-size: 15px;
+  font-weight: 850;
+}
+.issue-desc {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+@media (max-width: 1280px) {
+  .top-grid, .workspace-grid { grid-template-columns: 1fr; }
+  .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .hero-card { grid-template-columns: 92px 1fr; }
+  .divider, .hero-advice { display: none; }
+}
+@media (max-width: 768px) {
+  .page-header { height: auto; min-height: 72px; flex-direction: column; align-items: flex-start; padding: 14px 18px; gap: 12px; }
+  .brand-line { flex-direction: column; gap: 2px; }
+  .header-actions { flex-wrap: wrap; }
+  .container { padding: 16px; }
+  .metric-grid { grid-template-columns: 1fr; }
+  .metric-card { grid-template-columns: 52px 1fr; }
+  .detail-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header class="page-header">
+  <div class="brand">
+    <div class="logo">↗</div>
+    <div class="brand-line">
+      <h1>tradeAnalysis</h1>
+      <p>实盘交易复盘 · 不构成投资建议</p>
+    </div>
+  </div>
+  <div class="header-actions">
+    <div class="btn btn-danger">🗑 清除历史数据</div>
+    <div class="btn btn-primary">↥ 确认导入</div>
+    <div class="pill pill-success">● 已完成</div>
+  </div>
+</header>
+
+<main class="container">
+  <section class="top-grid">
+    <div class="card hero-card">
+      <div class="hero-icon-wrap">
+        <div class="hero-shield">!</div>
+      </div>
+      <div class="hero-main">
+        <h2>当前复盘：<span>高风险</span></h2>
+        <p>14 项发现 · <b>3</b> 笔风险交易 · 策略一致率 50%</p>
+      </div>
+      <div class="divider"></div>
+      <div class="hero-advice">
+        <div class="advice-label">◎ 复盘建议</div>
+        <strong>优先复盘追涨与止损执行问题</strong>
+      </div>
+    </div>
+
+    <div class="card utility-card">
+      <div class="utility-head">
+        <div class="utility-title"><span class="icon-box icon-blue">▣</span>数据源</div>
+        <span>⌄</span>
+      </div>
+      <div class="utility-main">sample_trades.csv · 6 笔交易</div>
+      <div class="utility-status"><span class="dot"></span>已加载 · 2026-05-31 22:08</div>
+    </div>
+
+    <div class="card utility-card">
+      <div class="utility-head">
+        <div class="utility-title"><span class="icon-box icon-purple">▧</span>图片识别导入</div>
+        <div class="upload-mini">上传图片</div>
+      </div>
+      <div class="utility-main">微信图片_20260531220448_5_2.jpg</div>
+      <div class="utility-status"><span class="dot"></span>已识别 · 2026-05-31 22:09</div>
+    </div>
+  </section>
+
+  <section class="metric-grid">
+    <div class="card metric-card">
+      <div class="metric-icon bg-green">↗</div>
+      <div>
+        <div class="metric-label">已实现盈亏</div>
+        <div class="metric-value text-green">577.40</div>
+        <div class="metric-help">较上次复盘 <span class="text-green">+577.40</span></div>
+      </div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-icon bg-blue">◎</div>
+      <div>
+        <div class="metric-label">胜率</div>
+        <div class="metric-value">50.00%</div>
+        <div class="metric-help">3 胜 / 3 负</div>
+      </div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-icon bg-purple">◴</div>
+      <div>
+        <div class="metric-label">Profit Factor</div>
+        <div class="metric-value">1.25</div>
+        <div class="metric-help">总盈利 / 总亏损</div>
+      </div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-icon bg-orange">◷</div>
+      <div>
+        <div class="metric-label">最大单笔仓位</div>
+        <div class="metric-value text-orange">32.40%</div>
+        <div class="metric-help"><span class="text-orange">超 30% 建议控制</span></div>
+      </div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-icon bg-teal">☷</div>
+      <div>
+        <div class="metric-label">策略一致率</div>
+        <div class="metric-value">50.00%</div>
+        <div class="metric-help"><span class="text-orange">中等偏低</span></div>
+      </div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-icon bg-red">△</div>
+      <div>
+        <div class="metric-label">风险交易</div>
+        <div class="metric-value text-red">3</div>
+        <div class="metric-help"><span class="text-red">占比 50.00%</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="workspace-grid">
+    <div class="card">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title-row">
+            <span class="icon-box icon-blue">☷</span>
+            <h2 class="panel-title">实际交易数据</h2>
+            <span class="panel-subtitle">6 笔 · 点击行查看右侧复盘</span>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="tool-btn">⌬ 筛选</div>
+          <div class="tool-btn">⇩ 导出</div>
+          <div class="tool-btn">⛶</div>
+        </div>
+      </div>
+      <div class="table-tabs">
+        <div class="segmented">
+          <button class="active">交易</button>
+          <button>配对</button>
+          <button>持仓</button>
+        </div>
+      </div>
+
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th><th>代码</th><th>名称</th><th>方向</th>
+              <th class="num">价格</th><th class="num">数量</th><th class="num">金额</th>
+              <th>情绪</th><th>理由</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="selected">
+              <td>2026-05-06 10:12</td><td>300750</td><td>宁德时代</td><td><span class="badge badge-buy">买入</span></td>
+              <td class="num">215.50</td><td class="num">200</td><td class="num">43,100.00</td><td class="emotion-warning">焦虑</td><td>突破买入，担心踏空</td>
+            </tr>
+            <tr>
+              <td>2026-05-07 14:45</td><td>300750</td><td>宁德时代</td><td><span class="badge badge-sell">卖出</span></td>
+              <td class="num">204.00</td><td class="num">200</td><td class="num">40,800.00</td><td class="emotion-danger">恐惧</td><td>跌破后止损</td>
+            </tr>
+            <tr>
+              <td>2026-05-07 15:05</td><td>600519</td><td>贵州茅台</td><td><span class="badge badge-buy">买入</span></td>
+              <td class="num">1,620.00</td><td class="num">100</td><td class="num">162,000.00</td><td class="emotion-danger">报复</td><td>想把刚才亏损赚回来</td>
+            </tr>
+            <tr>
+              <td>2026-05-10 10:30</td><td>600519</td><td>贵州茅台</td><td><span class="badge badge-sell">卖出</span></td>
+              <td class="num">1,650.00</td><td class="num">100</td><td class="num">165,000.00</td><td class="emotion-warning">害怕回撤</td><td>赚一点先落袋</td>
+            </tr>
+            <tr>
+              <td>2026-05-11 09:50</td><td>002475</td><td>立讯精密</td><td><span class="badge badge-buy">买入</span></td>
+              <td class="num">35.20</td><td class="num">1,000</td><td class="num">35,200.00</td><td class="emotion-warning">贪婪</td><td>看到快速拉升追入</td>
+            </tr>
+            <tr>
+              <td>2026-05-11 10:20</td><td>002475</td><td>立讯精密</td><td><span class="badge badge-buy">买入</span></td>
+              <td class="num">34.00</td><td class="num">1,000</td><td class="num">34,000.00</td><td class="emotion-warning">焦虑</td><td>下跌后补仓摊低成本</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-footer">
+        <div>共 6 条</div>
+        <div class="pagination">
+          <div class="page-btn">‹</div>
+          <div class="page-btn active">1</div>
+          <div class="page-btn">›</div>
+        </div>
+        <div class="page-size">20 条/页⌄</div>
+      </div>
+    </div>
+
+    <aside class="card analysis-card">
+      <div class="analysis-top">
+        <div>
+          <div class="panel-title-row">
+            <span class="icon-box bg-red">▧</span>
+            <h2 class="panel-title">分析结果</h2>
+            <span class="panel-subtitle">14 项发现 · 当前交易高风险</span>
+          </div>
+        </div>
+        <span class="badge badge-risk">▲ 高风险</span>
+      </div>
+
+      <div class="analysis-tabs">
+        <div class="segmented">
+          <button class="active">当前交易</button>
+          <button>问题</button>
+          <button>建议</button>
+          <button>实盘分析</button>
+        </div>
+      </div>
+
+      <div class="analysis-body">
+        <div class="risk-alert">
+          <span>♢</span>
+          <span>本次交易存在明显的追涨与情绪驱动特征，入场依据不足，风险控制缺失。</span>
+        </div>
+
+        <div class="detail-card">
+          <div class="detail-head">
+            <div class="stock-title">300750　宁德时代</div>
+            <span class="badge badge-buy">买入</span>
+          </div>
+          <div class="detail-grid">
+            <div class="detail-row"><div class="detail-label">成交时间:</div><div class="detail-value">2026-05-06 10:12</div></div>
+            <div class="detail-row"><div class="detail-label">关联问题:</div><div class="detail-value detail-link">5 项</div></div>
+            <div class="detail-row"><div class="detail-label">成交金额:</div><div class="detail-value">43,100.00</div></div>
+            <div class="detail-row"><div class="detail-label">风险等级:</div><div class="detail-value detail-danger">高风险</div></div>
+            <div class="detail-row"><div class="detail-label">情绪:</div><div class="detail-value">焦虑</div></div>
+          </div>
+          <div class="detail-notes">
+            <div class="note-line"><div class="detail-label">交易理由:</div><div>突破买入，担心踏空。入场依据偏主观，缺少量价确认与回撤预案。</div></div>
+            <div class="note-line"><div class="detail-label">计划:</div><div>突破210买入，跌破205止损，目标235。建议补充仓位上限与触发条件。</div></div>
+          </div>
+        </div>
+
+        <div class="issue-list">
+          <div class="issue-item">
+            <div class="issue-index">1</div>
+            <div>
+              <div class="issue-title">追涨入场</div>
+              <div class="issue-desc">价格突破后立即买入，但没有等待有效确认。</div>
+            </div>
+            <span class="badge badge-soft-red">高风险</span>
+          </div>
+          <div class="issue-item">
+            <div class="issue-index">2</div>
+            <div>
+              <div class="issue-title">情绪驱动</div>
+              <div class="issue-desc">“担心踏空”是主要动机，和交易计划一致性较弱。</div>
+            </div>
+            <span class="badge badge-soft-red">高风险</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </section>
+</main>
+</body>
+</html>
