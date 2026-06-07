@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .analyzer import AnalysisConfig, analyze_trades
-from .image_importer import import_trades_from_image, write_imported_csv
+from .image_importer import import_trades_from_image, merge_image_import_results, write_imported_csv
 from .loader import load_stock_profiles, load_strategy_signals, load_trades
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +52,7 @@ class TradeAnalysisHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path not in {"/api/analyze", "/api/import-image"}:
+        if parsed.path not in {"/api/analyze", "/api/import-image", "/api/clear-history"}:
             self._send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
         try:
@@ -63,6 +63,8 @@ class TradeAnalysisHandler(BaseHTTPRequestHandler):
                 raise ValueError("request body must be a JSON object")
             if parsed.path == "/api/import-image":
                 self._send_json(build_image_import_payload(payload))
+            elif parsed.path == "/api/clear-history":
+                self._send_json(build_clear_history_payload())
             else:
                 self._handle_analyze(payload)
         except Exception as exc:
@@ -145,38 +147,111 @@ def build_analysis_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_image_import_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    image_path = _image_path_from_payload(payload)
-    result = import_trades_from_image(image_path, engine=str(payload.get("engine") or "auto"))
+    image_paths, temporary_paths = _image_paths_from_payload(payload)
+    results = []
+    try:
+        for image_path in image_paths:
+            results.append(import_trades_from_image(
+                image_path,
+                engine=str(payload.get("engine") or "auto"),
+                agent=str(payload.get("agent") or "local"),
+            ))
+    finally:
+        for path in temporary_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    result = merge_image_import_results(results)
     out = write_imported_csv(result, ROOT / "output" / "image_imported_trades.csv")
     return {
         "csv_path": str(out),
         "engine": result.engine,
+        "image_count": len(image_paths),
         "imported_count": result.imported_count,
         "skipped_count": result.skipped_count,
+        "duplicate_count": result.duplicate_count,
         "trades": result.trades,
         "skipped": result.skipped,
+        "duplicates": result.duplicates,
     }
 
 
-def _image_path_from_payload(payload: dict[str, Any]) -> Path:
+def build_clear_history_payload() -> dict[str, Any]:
+    generated_files = [
+        ROOT / "output" / "image_imported_trades.csv",
+    ]
+    deleted = []
+    for path in generated_files:
+        if path.exists() and path.is_file():
+            path.unlink()
+            deleted.append(str(path))
+    return {
+        "deleted": deleted,
+        "message": "已清除当前界面历史数据和自动生成的图片导入文件。",
+    }
+
+
+def _image_paths_from_payload(payload: dict[str, Any]) -> tuple[list[Path], list[Path]]:
+    paths: list[Path] = []
+    temporary_paths: list[Path] = []
+
+    files = payload.get("files")
+    if isinstance(files, list):
+        for item in files:
+            if isinstance(item, dict) and item.get("data_url"):
+                tmp = _write_data_url_to_temp(str(item["data_url"]))
+                temporary_paths.append(tmp)
+                paths.append(tmp)
+
+    data_urls = payload.get("data_urls")
+    if isinstance(data_urls, list):
+        for data_url in data_urls:
+            tmp = _write_data_url_to_temp(str(data_url))
+            temporary_paths.append(tmp)
+            paths.append(tmp)
+
     data_url = str(payload.get("data_url") or "")
     if data_url:
-        if "," not in data_url:
-            raise ValueError("invalid image data URL")
-        header, encoded = data_url.split(",", 1)
-        suffix = ".png"
-        if "jpeg" in header or "jpg" in header:
-            suffix = ".jpg"
-        elif "webp" in header:
-            suffix = ".webp"
-        tmp = tempfile.NamedTemporaryFile(prefix="trade-image-", suffix=suffix, delete=False)
-        with tmp:
-            tmp.write(base64.b64decode(encoded))
-        return Path(tmp.name)
+        tmp = _write_data_url_to_temp(data_url)
+        temporary_paths.append(tmp)
+        paths.append(tmp)
 
-    image_path = str(payload.get("image_path") or payload.get("path") or DEFAULT_IMAGE).strip()
-    if not image_path:
+    path_values = payload.get("image_paths")
+    if isinstance(path_values, str):
+        path_values = _split_image_paths(path_values)
+    if isinstance(path_values, list):
+        paths.extend(_resolve_local_image_path(str(path)) for path in path_values if str(path).strip())
+
+    image_path = str(payload.get("image_path") or payload.get("path") or "").strip()
+    if image_path:
+        paths.extend(_resolve_local_image_path(path) for path in _split_image_paths(image_path))
+
+    if not paths:
         raise ValueError("请先选择图片文件，或输入本地图片路径。")
+    return paths, temporary_paths
+
+
+def _write_data_url_to_temp(data_url: str) -> Path:
+    if "," not in data_url:
+        raise ValueError("invalid image data URL")
+    header, encoded = data_url.split(",", 1)
+    suffix = ".png"
+    if "jpeg" in header or "jpg" in header:
+        suffix = ".jpg"
+    elif "webp" in header:
+        suffix = ".webp"
+    tmp = tempfile.NamedTemporaryFile(prefix="trade-image-", suffix=suffix, delete=False)
+    with tmp:
+        tmp.write(base64.b64decode(encoded))
+    return Path(tmp.name)
+
+
+def _split_image_paths(value: str) -> list[str]:
+    return [part.strip() for part in value.replace(",", "\n").splitlines() if part.strip()]
+
+
+def _resolve_local_image_path(image_path: str) -> Path:
     resolved = _resolve_source(image_path)
     if isinstance(resolved, str):
         raise ValueError("图片 OCR 当前只支持本地图片路径或上传文件。")
